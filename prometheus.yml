@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'scalper-pro'
+    static_configs:
+      - targets: ['scalper:8050']
+    metrics_path: '/metrics'

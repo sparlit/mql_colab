@@ -1,0 +1,43 @@
+# Scalper Pro - Multi-Brain Trading Engine
+# 10 brains + 108 enhancements
+
+__version__ = "1.0.0"
+
+__all__ = [
+    "brain_v1",
+    "brain_v2",
+    "brain_v3",
+    "brain_v4",
+    "brain_v5",
+    "brain_v6",
+    "brain_v7",
+    "brain_v8",
+    "brain_v9",
+    "brain_v10",
+    "brain_v11",
+    "config",
+    "strategies_advanced",
+    "pattern_recognition",
+    "quant_models",
+    "ml_enhancements",
+    "ai_advanced",
+    "ai_client",
+    "market_intelligence",
+    "microstructure",
+    "order_flow",
+    "execution_compliance",
+    "execution_optimization",
+    "risk_advanced",
+    "portfolio_risk",
+    "portfolio_engineering",
+    "data_analytics",
+    "alternative_data",
+    "institutional_analytics",
+    "metrics",
+    "alerts",
+    "providers",
+    "cache_layer",
+    "parallel_executor",
+    "infrastructure",
+    "logging_config",
+]
