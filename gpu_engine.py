@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 GPU_AVAILABLE = False
 GPU_BACKEND = "numpy"
 
+import warnings
+warnings.filterwarnings("ignore", message=".*CUDA path could not be detected.*")
+
 try:
     import cupy as cp
     # Test if CuPy can actually do operations
