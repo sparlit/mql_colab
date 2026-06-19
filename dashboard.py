@@ -7,6 +7,7 @@ from enum import Enum
 import os
 import sys
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -432,14 +433,7 @@ async function poll(){
   }catch(x){console.error('Poll error:',x)}
   setTimeout(poll,500);
 }
-function setProc(id,text,active){
-  const el=$(id);if(!el)return;
-  const row=el.closest('.process-row');
-  if(row){const dot=row.querySelector('.live-dot');if(dot)dot.className='live-dot '+(active?'on':'off');}
-  el.textContent=text;
-}
 poll();
-setInterval(poll, 500);
 </script>
 </body>
 </html>
@@ -656,30 +650,38 @@ def get_dashboard_data():
         logger.debug("Bayesian probs access failed: %s", e)
         data['bayesian_probs'] = {}
 
-    # V2 context - safe access
-    try:
-        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 300)
-        if rates is not None:
-            df = pd.DataFrame(rates)
-            _brain.v10.v9.v8.v7.v6.v5.v4.v3.v2.v1.analyzer._calc_indicators(df)
-            regime_info = _brain.v10.v9.v8.v7.v6.v5.v4.v3.v2.regime.detect(df)
-            data['regime'] = regime_info.get('regime', 'unknown')
-            raw_adx = float(regime_info.get('adx', 0) or 0)
-            data['adx'] = raw_adx if raw_adx == raw_adx else 0.0  # NaN check
-            data['squeeze'] = bool(regime_info.get('squeeze', False))
-            data['range_pct'] = regime_info.get('range_pct', 0)
-            data['candle_patterns'] = [p[0] for p in _brain.v10.v9.v8.v7.v6.v5.v4.v3.v2.candles.detect(df)]
-            ft, fc = _brain.v10.v9.v8.v7.v6.v5.v4.v3.v2.fractals.detect_pattern(df)
-            data['fractal_trend'] = ft
-            z = _brain.v10.v9.v8.v7.v6.v5.v4.v3.v2.zscore.calculate(df)
-            data['z_score'] = float(z) if z is not None and not (isinstance(z, float) and z != z) else 0.0
-        else:
+    # V2 context - cached (expensive MT5 + brain chain calls)
+    _v2_cache = getattr(get_dashboard_data, '_v2_cache', None)
+    _v2_cache_time = getattr(get_dashboard_data, '_v2_cache_time', 0)
+    if _v2_cache and (time.time() - _v2_cache_time) < 5:
+        data.update(_v2_cache)
+    else:
+        try:
+            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 300)
+            if rates is not None:
+                df = pd.DataFrame(rates)
+                _brain.v10.v9.v8.v7.v6.v5.v4.v3.v2.v1.analyzer._calc_indicators(df)
+                regime_info = _brain.v10.v9.v8.v7.v6.v5.v4.v3.v2.regime.detect(df)
+                data['regime'] = regime_info.get('regime', 'unknown')
+                raw_adx = float(regime_info.get('adx', 0) or 0)
+                data['adx'] = raw_adx if raw_adx == raw_adx else 0.0
+                data['squeeze'] = bool(regime_info.get('squeeze', False))
+                data['range_pct'] = regime_info.get('range_pct', 0)
+                data['candle_patterns'] = [p[0] for p in _brain.v10.v9.v8.v7.v6.v5.v4.v3.v2.candles.detect(df)]
+                ft, fc = _brain.v10.v9.v8.v7.v6.v5.v4.v3.v2.fractals.detect_pattern(df)
+                data['fractal_trend'] = ft
+                z = _brain.v10.v9.v8.v7.v6.v5.v4.v3.v2.zscore.calculate(df)
+                data['z_score'] = float(z) if z is not None and not (isinstance(z, float) and z != z) else 0.0
+            else:
+                data['regime'] = 'unknown'; data['adx'] = 0; data['squeeze'] = False
+                data['range_pct'] = 0; data['candle_patterns'] = []; data['fractal_trend'] = 'neutral'; data['z_score'] = 0
+        except Exception as e:
+            logger.debug("V2 context access failed: %s", e)
             data['regime'] = 'unknown'; data['adx'] = 0; data['squeeze'] = False
             data['range_pct'] = 0; data['candle_patterns'] = []; data['fractal_trend'] = 'neutral'; data['z_score'] = 0
-    except Exception as e:
-        logger.debug("V2 context access failed: %s", e)
-        data['regime'] = 'unknown'; data['adx'] = 0; data['squeeze'] = False
-        data['range_pct'] = 0; data['candle_patterns'] = []; data['fractal_trend'] = 'neutral'; data['z_score'] = 0
+        _v2_keys = ['regime','adx','squeeze','range_pct','candle_patterns','fractal_trend','z_score']
+        get_dashboard_data._v2_cache = {k: data[k] for k in _v2_keys if k in data}
+        get_dashboard_data._v2_cache_time = time.time()
 
     try:
         data['session'] = _brain.v10.v9.v8.v7.v6.v5.v4.v3.v2.session.get_current_session()
