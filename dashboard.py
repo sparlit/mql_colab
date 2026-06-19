@@ -439,6 +439,7 @@ function setProc(id,text,active){
   el.textContent=text;
 }
 poll();
+setInterval(poll, 500);
 </script>
 </body>
 </html>
@@ -653,9 +654,6 @@ def get_dashboard_data():
         data['bayesian_probs'] = _brain.v10.v9.v8.v7.v6.v5.v4.bayesian.get_all_probabilities()
     except Exception as e:
         logger.debug("Bayesian probs access failed: %s", e)
-        data['bayesian_probs'] = {}
-
-    # V2 context
         data['bayesian_probs'] = {}
 
     # V2 context - safe access
