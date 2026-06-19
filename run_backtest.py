@@ -384,17 +384,27 @@ def extract_trades_from_engine(signals, bars, initial_balance=10000, pip_value=1
 
 
 if __name__ == "__main__":
+    import sys
     import time as _time
     logging.basicConfig(level=logging.INFO)
 
+    # Parse simple args
+    symbol = "EURUSD"
+    timeframe = None
+    for i, arg in enumerate(sys.argv[1:]):
+        if arg == "--symbol" and i + 1 < len(sys.argv) - 1:
+            symbol = sys.argv[i + 2]
+        elif arg == "--timeframe" and i + 1 < len(sys.argv) - 1:
+            timeframe = int(sys.argv[i + 2])
+
     logger.info("=== Backtest Runner: batch-optimized ===")
 
-    report = run_full_backtest(months=3, max_bars=50000, timeout_seconds=300)
+    report = run_full_backtest(symbol=symbol, timeframe=timeframe, months=3, max_bars=50000, timeout_seconds=300)
     print(json.dumps(report, indent=2, default=str))
 
     if "error" not in report and not report.get("partial"):
         logger.info("3-month backtest succeeded, trying 6 months...")
-        report_6m = run_full_backtest(months=6, max_bars=50000, timeout_seconds=300)
+        report_6m = run_full_backtest(symbol=symbol, timeframe=timeframe, months=6, max_bars=50000, timeout_seconds=300)
         if "error" not in report_6m and not report_6m.get("partial"):
             report = report_6m
             print("\n=== 6-month results ===")
