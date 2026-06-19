@@ -320,6 +320,71 @@ class SLTPEngine:
             "current_price": current_price,
         }
 
+    def manage_partial_close(self, ticket, symbol, direction, entry_price, current_sl, current_tp,
+                             profit_pips, close_pct=50, min_rr_for_partial=1.0):
+        """Manage partial close at 1:1 R:R and breakeven protection.
+
+        When price reaches min_rr_for_partial ratio (default 1:1), close close_pct%
+        of the position and move SL to breakeven.
+
+        Args:
+            ticket: Position ticket
+            symbol: Trading symbol
+            direction: 1=BUY, -1=SELL
+            entry_price: Entry price
+            current_sl: Current stop loss
+            current_tp: Current take profit
+            profit_pips: Current profit in pips
+            close_pct: Percentage of position to close at 1:1 R:R
+            min_rr_for_partial: Minimum R:R ratio to trigger partial close
+        Returns:
+            dict with action, close_volume, new_sl, reason
+        """
+        info = mt5.symbol_info(symbol)
+        if not info:
+            return {"action": "hold", "reason": "no_info"}
+
+        point = info.point
+        digits = info.digits
+        abs_sl_pips = abs(entry_price - current_sl) / point if current_sl > 0 else 0
+
+        if abs_sl_pips <= 0:
+            return {"action": "hold", "reason": "no_sl_set"}
+
+        rr_ratio = profit_pips / abs_sl_pips
+
+        if rr_ratio < min_rr_for_partial:
+            return {"action": "hold", "reason": f"rr_{rr_ratio:.2f}_below_{min_rr_for_partial}"}
+
+        # Get current position volume
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions:
+            return {"action": "hold", "reason": "position_not_found"}
+        pos = positions[0]
+        close_volume = round(pos.volume * close_pct / 100, 2)
+        info_vol = mt5.symbol_info(symbol)
+        if info_vol:
+            close_volume = max(info_vol.volume_min, min(close_volume, pos.volume))
+            close_volume = round(close_volume / info_vol.volume_step) * info_vol.volume_step
+
+        if close_volume < info.volume_min:
+            return {"action": "hold", "reason": "volume_too_small"}
+
+        # Move SL to breakeven (entry + small offset)
+        be_offset = 5 * point
+        if direction == 1:
+            new_sl = round(entry_price + be_offset, digits)
+        else:
+            new_sl = round(entry_price - be_offset, digits)
+
+        return {
+            "action": "partial_close",
+            "close_volume": round(close_volume, 2),
+            "new_sl": new_sl,
+            "reason": f"partial_close_at_rr_{rr_ratio:.2f}",
+            "rr_ratio": rr_ratio,
+        }
+
     def calculate_partial_close_levels(self, entry_price, tp_price, direction, levels=3):
         """Calculate partial close levels for TTP (Trailing Take Profit).
 

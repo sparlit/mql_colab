@@ -1037,6 +1037,38 @@ class Brain:
                 except Exception:
                     atr = point * 50  # Fallback
                 direction = 1 if pos.type == mt5.ORDER_TYPE_BUY else -1
+
+                # Partial close at 1:1 R:R (50% close + breakeven)
+                partial_result = sltp.manage_partial_close(
+                    ticket=pos.ticket, symbol=symbol, direction=direction,
+                    entry_price=pos.price_open, current_sl=pos.sl, current_tp=pos.tp,
+                    profit_pips=profit_pips, close_pct=50, min_rr_for_partial=1.0,
+                )
+                if partial_result and partial_result.get("action") == "partial_close":
+                    close_vol = partial_result.get("close_volume", 0)
+                    if close_vol > 0:
+                        close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+                        close_tick = mt5.symbol_info_tick(symbol)
+                        if close_tick:
+                            close_price = close_tick.bid if pos.type == mt5.ORDER_TYPE_BUY else close_tick.ask
+                            close_request = {
+                                "action": mt5.TRADE_ACTION_DEAL,
+                                "symbol": symbol,
+                                "volume": close_vol,
+                                "type": close_type,
+                                "position": pos.ticket,
+                                "price": close_price,
+                                "magic": pos.magic,
+                                "comment": "PartialClose",
+                                "type_time": mt5.ORDER_TIME_GTC,
+                                "type_filling": mt5.ORDER_FILLING_IOC,
+                            }
+                            close_result = _send_order_with_fallback(close_request)
+                            if close_result and close_result.retcode == mt5.TRADE_RETCODE_DONE:
+                                logger.info("Partial close %s: %.2f lots at 1:1 R:R", symbol, close_vol)
+                                new_sl = partial_result.get("new_sl", 0)
+
+                # Trailing stop / breakeven for remaining position
                 trail_result = sltp.manage_trailing_stop(
                     ticket=pos.ticket, symbol=symbol, direction=direction,
                     entry_price=pos.price_open, current_sl=pos.sl, current_tp=pos.tp,

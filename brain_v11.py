@@ -40,14 +40,17 @@ class TradingMethod(Enum):
     RANGE_TRADING = "range_trading"
     TMC = "tmc"  # Trend Momentum Continuation
 
+# Active methods whitelist (scalping mode)
+ACTIVE_METHODS = [TradingMethod.SCALPING, TradingMethod.DAY_TRADING]
+
 # Method configurations
 METHOD_CONFIGS = {
     TradingMethod.SCALPING: {
         "timeframes": [mt5.TIMEFRAME_M1, mt5.TIMEFRAME_M5],
         "hold_min": 1, "hold_max": 30,
         "sl_atr_mult": 0.8, "tp_atr_mult": 1.5,
-        "min_confidence": 0.65, "max_spread": 10,
-        "risk_per_trade": 0.5, "max_positions": 3,
+        "min_confidence": 0.70, "max_spread": 10,
+        "risk_per_trade": 0.25, "max_positions": 3,
         "description": "M1-M5 momentum/mean-reversion, tight TP/SL",
     },
     TradingMethod.DAY_TRADING: {
@@ -249,7 +252,7 @@ class MethodSelector:
         trend = regime_info.get("trend_alignment", 0)
 
         if available_methods is None:
-            available_methods = list(TradingMethod)
+            available_methods = list(ACTIVE_METHODS)
 
         # Regime → method mapping
         method_scores = {}
