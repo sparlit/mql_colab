@@ -3,6 +3,7 @@ import numpy as np
 import logging
 import threading
 from datetime import datetime, timezone
+from news_filter import is_news_window, is_holiday
 
 try:
     from numba import njit
@@ -450,6 +451,15 @@ def is_tradeable_now(symbol, timeframe=None):
             - can_trade (bool)
             - reason (str)
     """
+    # Check holiday
+    if is_holiday():
+        return {"can_trade": False, "reason": "Holiday — market closed"}
+
+    # Check news window (NFP/FOMC)
+    in_news, news_detail = is_news_window()
+    if in_news:
+        return {"can_trade": False, "reason": f"Near high-impact event: {news_detail}"}
+
     # Check trading session
     if not is_valid_session():
         return {"can_trade": False, "reason": "Outside allowed trading sessions"}

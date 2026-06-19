@@ -13,6 +13,7 @@ from indicators import is_tradeable_now, validate_tick_freshness, MT5_TRADE_RETC
 from sltp_engine import get_sltp_engine
 from execution_optimization import AdvancedExecutor
 from brain_v1 import _send_order_with_fallback
+from alerts import get_alert_manager
 
 logger = logging.getLogger(__name__)
 
@@ -329,10 +330,28 @@ class BrainV6:
         self.recovery = AutoRecovery()
         self._last_health_check = 0
         self._advanced_executor = None
+        self._order_results = deque(maxlen=20)
+        self._rejection_pause_until = 0
         try:
             self._advanced_executor = AdvancedExecutor()
         except Exception:
             pass
+
+    def _track_order_result(self, success, reason=""):
+        self._order_results.append({"ok": success, "reason": reason, "time": _time.time()})
+
+    def _is_rejection_rate_high(self):
+        if len(self._order_results) < 10:
+            return False
+        recent = list(self._order_results)[-10:]
+        rejects = sum(1 for r in recent if not r["ok"])
+        rate = rejects / len(recent)
+        return rate > 0.5
+
+    def _check_rejection_pause(self):
+        if _time.time() < self._rejection_pause_until:
+            return True
+        return False
 
     def safe_analyze(self, symbol, timeframe=mt5.TIMEFRAME_M1, params=None, df=None):
         # Health check
@@ -345,6 +364,10 @@ class BrainV6:
                     logger.info("Reconnected successfully")
                 else:
                     logger.warning("Reconnect failed, waiting...")
+                    try:
+                        get_alert_manager().alert_mt5_disconnect("Reconnect failed")
+                    except Exception:
+                        pass
                     return {"action": "hold", "confidence": 0, "reason": "MT5 disconnected"}
             self._last_health_check = now
 
@@ -383,11 +406,16 @@ class BrainV6:
         if decision.get("action") != "trade":
             return False
 
+        if self._check_rejection_pause():
+            logger.warning("Rejection rate pause active — skipping execution")
+            return False
+
         # Full market state check — includes symbol-specific cooldown tracking
         tradeable = is_tradeable_now(symbol)
         if not tradeable["can_trade"]:
             logger.warning("Cannot trade %s: %s", symbol, tradeable['reason'])
             self.error_tracker.record(f"Trade blocked: {tradeable['reason']}", source="brain_v6")
+            self._track_order_result(False, f"blocked: {tradeable['reason']}")
             return False
 
         # Validate request before sending
@@ -395,6 +423,7 @@ class BrainV6:
         tick = mt5.symbol_info_tick(symbol)
         if not tick:
             self.error_tracker.record("No tick data for execution", source="brain_v6")
+            self._track_order_result(False, "no tick data")
             return False
 
         # Validate tick freshness — reject if data is stale
@@ -402,17 +431,20 @@ class BrainV6:
         if not tick_check["fresh"]:
             logger.warning("Stale tick for %s: %s", symbol, tick_check['reason'])
             self.error_tracker.record(f"Stale tick: {tick_check['reason']}", source="brain_v6")
+            self._track_order_result(False, f"stale tick: {tick_check['reason']}")
             return False
 
         info = mt5.symbol_info(symbol)
         if not info:
             self.error_tracker.record(f"Symbol {symbol} not found", source="brain_v6")
+            self._track_order_result(False, f"symbol {symbol} not found")
             return False
 
         # Check if market is open
         if info.trade_mode != mt5.SYMBOL_TRADE_MODE_FULL:
             logger.warning("Market closed for %s (trade_mode=%s)", symbol, info.trade_mode)
             self.error_tracker.record(f"Market closed for {symbol}", source="brain_v6")
+            self._track_order_result(False, f"market closed: {symbol}")
             return False
 
         price = tick.ask if direction == 1 else tick.bid
@@ -479,6 +511,7 @@ class BrainV6:
 
             valid_after_fix, _ = self.validator.validate_request(request, symbol)
             if not valid_after_fix:
+                self._track_order_result(False, "validation failed after auto-fix")
                 return False
 
         # Execute with error handling
@@ -497,12 +530,14 @@ class BrainV6:
             if result is None:
                 error_msg = f"Trade failed: order_send returned None (last_error: {mt5.last_error()})"
                 self.error_tracker.record(error_msg, context=f"execute({symbol})", source="brain_v6")
+                self._track_order_result(False, error_msg)
                 logger.warning("%s", error_msg)
                 return False
 
             if result.retcode != mt5.TRADE_RETCODE_DONE:
                 error_msg = f"Trade error: {result.comment} (code: {result.retcode})"
                 self.error_tracker.record(error_msg, context=f"execute({symbol})", source="brain_v6")
+                self._track_order_result(False, error_msg)
                 logger.warning("%s", error_msg)
                 # Handle market closed error — mark symbol and prevent retries
                 if result.retcode == MT5_TRADE_RETCODE_MARKET_CLOSED:
@@ -519,6 +554,7 @@ class BrainV6:
                         result2 = _send_order_with_fallback(request)
                         if result2 is not None and result2.retcode == mt5.TRADE_RETCODE_DONE:
                             self.error_tracker.record_success()
+                            self._track_order_result(True)
                             return True
                         # Check if retry also hit market closed
                         if result2 and result2.retcode == MT5_TRADE_RETCODE_MARKET_CLOSED:
@@ -531,22 +567,30 @@ class BrainV6:
                         result2 = _send_order_with_fallback(request)
                         if result2 is not None and result2.retcode == mt5.TRADE_RETCODE_DONE:
                             self.error_tracker.record_success()
+                            self._track_order_result(True)
                             return True
                 elif "change_filling" in recovery:
                     request["type_filling"] = mt5.ORDER_FILLING_FOK
                     result2 = _send_order_with_fallback(request)
                     if result2 is not None and result2.retcode == mt5.TRADE_RETCODE_DONE:
                         self.error_tracker.record_success()
+                        self._track_order_result(True)
                         return True
+                self._track_order_result(False, "recovery failed")
                 return False
 
             self.error_tracker.record_success()
+            self._track_order_result(True)
+            if self._is_rejection_rate_high():
+                self._rejection_pause_until = _time.time() + 300
+                logger.warning("Rejection rate > 50%% in last 10 orders — pausing 5min")
             logger.info("Executed in %.0fms | Conf: %.3f", exec_time, decision.get('confidence', 0))
             return True
 
         except Exception as e:
             error_msg = f"{type(e).__name__}: {str(e)}"
             self.error_tracker.record(error_msg, context=f"execute({symbol})", source="brain_v6")
+            self._track_order_result(False, error_msg)
             logger.error("Execution error: %s", error_msg)
             return False
 

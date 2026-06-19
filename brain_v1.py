@@ -7,6 +7,7 @@ import json
 import os
 import logging
 import threading
+import time as _time
 from ai_client import get_ai_client
 from config import DATA_DIR, get_magic_number, magic_belongs_to_brain, is_system_magic, CORRELATION_GROUPS, MIN_CONFIDENCE_TO_TRADE
 from indicators import fetch_closed_rates, validate_rate_freshness, is_tradeable_now, validate_tick_freshness
@@ -17,6 +18,7 @@ from portfolio_risk import get_portfolio_manager
 from risk_advanced import CorrelationStressTest, BlackSwanDetector
 from gpu_engine import GPUIndicators
 from portfolio_engineering import ConstrainedKelly
+from alerts import get_alert_manager
 
 logger = logging.getLogger(__name__)
 
@@ -641,12 +643,18 @@ class SignalAnalyzer:
         return {"direction": 0, "confidence": 0, "name": "support_resistance"}
 
 
+REVENGE_LOSS_THRESHOLD = 3
+REVENGE_PAUSE_SECONDS = 3600
+
+
 class RiskManager:
     def __init__(self, stats):
         self.stats = stats
         self._portfolio_risk = None
         self._black_swan = BlackSwanDetector()
         self._constrained_kelly = ConstrainedKelly()
+        self._consecutive_losses = {}
+        self._pause_until = {}
 
     def _get_portfolio_risk(self):
         if self._portfolio_risk is None:
@@ -707,9 +715,31 @@ class RiskManager:
         result = engine.calculate_sl_tp(symbol, direction, df)
         return result["sl"], result["tp"], result["sl_points"], result["tp_points"]
 
+    def _is_paused_for_revenge(self, symbol):
+        until = self._pause_until.get(symbol, 0)
+        if until and _time.time() < until:
+            return True
+        return False
+
+    def record_symbol_trade(self, symbol, profit):
+        if profit < 0:
+            self._consecutive_losses[symbol] = self._consecutive_losses.get(symbol, 0) + 1
+            if self._consecutive_losses[symbol] >= REVENGE_LOSS_THRESHOLD:
+                self._pause_until[symbol] = _time.time() + REVENGE_PAUSE_SECONDS
+                logger.warning("Revenge pause: %s — %d consecutive losses", symbol, self._consecutive_losses[symbol])
+        else:
+            self._consecutive_losses[symbol] = 0
+            self._pause_until.pop(symbol, None)
+
     def can_open_trade(self, symbol, direction):
+        if self._is_paused_for_revenge(symbol):
+            remaining = max(0, self._pause_until.get(symbol, 0) - _time.time())
+            return False, f"Revenge trading pause for {symbol} ({remaining:.0f}s left)"
         open_positions = mt5.positions_get()
         my_positions = [p for p in (open_positions or []) if is_system_magic(p.magic)]
+        for p in my_positions:
+            if p.symbol == symbol:
+                return False, f"Already have open position on {symbol}"
         if len(my_positions) >= 5:
             return False, "Max positions reached"
         correlated_count = 0
@@ -730,6 +760,10 @@ class RiskManager:
         if same_direction >= 2:
             return False, "Max same-direction trades on symbol"
         if self.stats.current_drawdown > MAX_DRAWDOWN_KILL:
+            try:
+                get_alert_manager().alert_circuit_breaker(f"Drawdown kill: {self.stats.current_drawdown:.1f}%")
+            except Exception:
+                pass
             return False, f"Drawdown kill switch ({self.stats.current_drawdown:.1f}%)"
         # Daily loss circuit breaker
         account = mt5.account_info()
@@ -737,6 +771,10 @@ class RiskManager:
             daily_pnl = self.stats.get_daily_pnl()
             daily_loss_pct = abs(daily_pnl) / account.equity * 100 if daily_pnl < 0 else 0
             if daily_loss_pct >= DAILY_LOSS_HARD_STOP:
+                try:
+                    get_alert_manager().alert_daily_loss(daily_loss_pct, account.equity)
+                except Exception:
+                    pass
                 return False, f"Daily loss hard stop ({daily_loss_pct:.1f}% >= {DAILY_LOSS_HARD_STOP}%)"
         # Margin safety
         if account:
@@ -758,6 +796,10 @@ class RiskManager:
         try:
             swan = self._black_swan.detect()
             if swan and swan.get("detected") and swan.get("severity", 0) > 0.5:
+                try:
+                    get_alert_manager().alert_black_swan(symbol, f"severity={swan.get('severity', 0):.2f} type={swan.get('type', '')}")
+                except Exception:
+                    pass
                 return False, f"Black swan detected: {swan.get('type', '')} (z={swan.get('z_score', 0)})"
         except Exception:
             pass
@@ -934,6 +976,7 @@ class Brain:
             "confidence": self.last_signals.get("_last_confidence", 0),
         }
         self.stats.record_trade(trade_info)
+        self.risk.record_symbol_trade(symbol, profit)
 
     def manage_positions(self, symbol):
         open_positions = mt5.positions_get()
