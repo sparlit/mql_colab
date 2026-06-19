@@ -35,7 +35,8 @@ def _parse_date(d):
     return d
 
 
-def fetch_historical_data(symbol, timeframe, start_date, end_date, use_cache=True):
+def fetch_historical_data(symbol, timeframe, start_date, end_date, use_cache=True,
+                          max_bars=50000, progress_callback=None):
     """Fetch OHLCV bars from MT5 for a date range.
 
     Args:
@@ -44,6 +45,8 @@ def fetch_historical_data(symbol, timeframe, start_date, end_date, use_cache=Tru
         start_date: 'YYYY-MM-DD' string or datetime
         end_date: 'YYYY-MM-DD' string or datetime
         use_cache: if True, check disk cache first
+        max_bars: maximum number of bars to fetch (prevents memory issues)
+        progress_callback: optional callable(fetched_bars, total_bars) for progress
 
     Returns:
         pd.DataFrame with columns: time, open, high, low, close, tick_volume, spread
@@ -65,9 +68,8 @@ def fetch_historical_data(symbol, timeframe, start_date, end_date, use_cache=Tru
     tf_seconds = timeframe
     start_ts = int(start_dt.timestamp())
     end_ts = int(end_dt.timestamp())
-    bars_needed = max(1, (end_ts - start_ts) // tf_seconds + 1)
+    bars_needed = min(max(1, (end_ts - start_ts) // tf_seconds + 1), max_bars)
 
-    # Try fetching in chunks if large request fails
     all_rates = []
     chunk_size = 50000
     remaining = bars_needed
@@ -77,13 +79,15 @@ def fetch_historical_data(symbol, timeframe, start_date, end_date, use_cache=Tru
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, fetch_count)
         if rates is None or len(rates) == 0:
             if all_rates:
-                break  # Got some data, use what we have
+                break
             logger.error("MT5 copy_rates_from_pos failed: %s", mt5.last_error())
             return None
         all_rates.extend(rates)
         remaining -= len(rates)
+        if progress_callback:
+            progress_callback(len(all_rates), bars_needed)
         if len(rates) < fetch_count:
-            break  # No more data available
+            break
     
     if not all_rates:
         return None

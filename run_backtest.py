@@ -101,11 +101,16 @@ def monte_carlo_simulation(trades, n_simulations=1000, initial_balance=10000,
     }
 
 
-def _generate_signals(df, baseline, sl_pips=50, tp_pips=100):
-    """Generate signals from RulesBaseline for each bar in df."""
+def _generate_signals(df, baseline, sl_pips=50, tp_pips=100, progress_interval=1000):
+    """Generate signals from RulesBaseline for each bar in df.
+
+    Args:
+        progress_interval: print progress every N bars
+    """
     signals = []
     min_bars = 50
-    for i in range(len(df)):
+    total = len(df)
+    for i in range(total):
         if i < min_bars:
             signals.append({"action": "hold", "confidence": 0, "sl_pips": sl_pips, "tp_pips": tp_pips})
             continue
@@ -114,78 +119,128 @@ def _generate_signals(df, baseline, sl_pips=50, tp_pips=100):
         result["sl_pips"] = sl_pips
         result["tp_pips"] = tp_pips
         signals.append(result)
+        if progress_interval and (i + 1) % progress_interval == 0:
+            logger.info("Signal generation: %d/%d bars (%.0f%%)", i + 1, total, (i + 1) / total * 100)
     return signals
 
 
-def run_full_backtest(symbol="EURUSD", timeframe=None, months=12,
+def run_full_backtest(symbol="EURUSD", timeframe=None, months=3,
                       initial_balance=10000, pip_value=10.0,
-                      sl_pips=50, tp_pips=100):
-    if timeframe is None:
-        import MetaTrader5 as mt5
-        timeframe = mt5.TIMEFRAME_M5
+                      sl_pips=50, tp_pips=100, max_bars=50000,
+                      timeout_seconds=300):
     """Run complete backtest pipeline.
 
-    1. Fetch historical data from MT5
+    1. Fetch historical data from MT5 (capped by max_bars)
     2. Run RulesBaseline through EventDrivenBacktestEngine
     3. Run walk-forward validation
     4. Run Monte Carlo simulation
     5. Check against validation_pipeline gate criteria
     6. Save report to brain_data/backtest_report.json
 
+    Args:
+        months: default reduced to 3 for manageable batch
+        max_bars: cap on total bars fetched (default 50000)
+        timeout_seconds: hard timeout for entire pipeline (default 300s)
+
     Returns:
         dict with full report
     """
+    import time as _time
+    pipeline_start = _time.time()
+
+    if timeframe is None:
+        import MetaTrader5 as mt5
+        timeframe = mt5.TIMEFRAME_M5
+
     end_date = datetime.now()
     start_date = end_date - timedelta(days=months * 30)
 
-    logger.info("Fetching %s data: %s to %s (M5)", symbol, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
-    df = fetch_historical_data(symbol, timeframe, start_date, end_date, use_cache=True)
+    def _on_fetch_progress(fetched, total):
+        logger.info("Data fetch: %d/%d bars (%.0f%%)", fetched, total, fetched / total * 100 if total else 0)
+
+    logger.info("Fetching %s data: %s to %s (M5) [max_bars=%d]", symbol,
+                start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), max_bars)
+    df = fetch_historical_data(symbol, timeframe, start_date, end_date, use_cache=True,
+                               max_bars=max_bars, progress_callback=_on_fetch_progress)
     if df is None or len(df) < 200:
         return {"error": "Failed to fetch sufficient data", "bars": len(df) if df is not None else 0}
 
     logger.info("Fetched %d bars", len(df))
 
-    bars = df_to_bars(df)
-    baseline = RulesBaseline()
-    signals = _generate_signals(df, baseline, sl_pips, tp_pips)
-
-    engine = EventDrivenBacktestEngine(
-        spread_pips=1.5, slippage_pips=0.5, commission_per_lot=7.0,
-    )
-    backtest_results = engine.run(signals, bars, initial_balance=initial_balance, pip_value=pip_value)
-    logger.info("Backtest: %d trades, Sharpe=%.2f, DD=%.1f%%, PF=%.2f",
-                backtest_results["total_trades"], backtest_results["sharpe_ratio"],
-                backtest_results["max_drawdown"], backtest_results["profit_factor"])
-
-    walk_forward_results = run_walk_forward(
-        df, initial_balance=initial_balance, pip_value=pip_value,
-        train_pct=0.7, n_windows=5, sl_pips=sl_pips, tp_pips=tp_pips,
-    )
-
-    mc_trades = extract_trades_from_engine(signals, bars, initial_balance=initial_balance, pip_value=pip_value)
-    mc_results = monte_carlo_simulation(mc_trades, n_simulations=1000, initial_balance=initial_balance)
-
-    pipeline = ValidationPipeline()
-    gate_result = pipeline.evaluate_backtest(backtest_results)
-
+    report_path = os.path.join(DATA_DIR, "backtest_report.json")
+    os.makedirs(DATA_DIR, exist_ok=True)
     report = {
         "generated_at": datetime.now().isoformat(),
         "symbol": symbol,
         "timeframe": timeframe,
         "months": months,
         "bars": len(df),
-        "backtest": backtest_results,
-        "walk_forward": walk_forward_results,
-        "monte_carlo": mc_results,
-        "gate_criteria": gate_result,
     }
 
-    report_path = os.path.join(DATA_DIR, "backtest_report.json")
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(report_path, "w") as f:
-        json.dump(report, f, indent=2, default=str)
-    logger.info("Report saved to %s", report_path)
+    def _save_report(r):
+        try:
+            with open(report_path, "w") as f:
+                json.dump(r, f, indent=2, default=str)
+            logger.info("Report saved to %s", report_path)
+        except Exception as e:
+            logger.error("Failed to save report: %s", e)
 
+    try:
+        bars = df_to_bars(df)
+        baseline = RulesBaseline()
+        signals = _generate_signals(df, baseline, sl_pips, tp_pips)
+
+        elapsed = _time.time() - pipeline_start
+        if elapsed > timeout_seconds:
+            logger.warning("Timeout approaching after signal generation (%.0fs), saving partial report", elapsed)
+            report["partial"] = True
+            report["error"] = f"Timeout after signal generation ({elapsed:.0f}s)"
+            _save_report(report)
+            return report
+
+        engine = EventDrivenBacktestEngine(
+            spread_pips=1.5, slippage_pips=0.5, commission_per_lot=7.0,
+        )
+        backtest_results = engine.run(signals, bars, initial_balance=initial_balance, pip_value=pip_value)
+        report["backtest"] = backtest_results
+        logger.info("Backtest: %d trades, Sharpe=%.2f, DD=%.1f%%, PF=%.2f",
+                    backtest_results["total_trades"], backtest_results["sharpe_ratio"],
+                    backtest_results["max_drawdown"], backtest_results["profit_factor"])
+
+        elapsed = _time.time() - pipeline_start
+        if elapsed > timeout_seconds:
+            logger.warning("Timeout approaching after backtest (%.0fs), saving partial report", elapsed)
+            report["partial"] = True
+            _save_report(report)
+            return report
+
+        walk_forward_results = run_walk_forward(
+            df, initial_balance=initial_balance, pip_value=pip_value,
+            train_pct=0.7, n_windows=5, sl_pips=sl_pips, tp_pips=tp_pips,
+        )
+        report["walk_forward"] = walk_forward_results
+
+        elapsed = _time.time() - pipeline_start
+        if elapsed > timeout_seconds:
+            logger.warning("Timeout approaching after walk-forward (%.0fs), saving partial report", elapsed)
+            report["partial"] = True
+            _save_report(report)
+            return report
+
+        mc_trades = extract_trades_from_engine(signals, bars, initial_balance=initial_balance, pip_value=pip_value)
+        mc_results = monte_carlo_simulation(mc_trades, n_simulations=1000, initial_balance=initial_balance)
+        report["monte_carlo"] = mc_results
+
+        pipeline = ValidationPipeline()
+        gate_result = pipeline.evaluate_backtest(backtest_results)
+        report["gate_criteria"] = gate_result
+
+    except Exception as e:
+        logger.error("Backtest pipeline error: %s", e, exc_info=True)
+        report["error"] = str(e)
+        report["partial"] = True
+
+    _save_report(report)
     return report
 
 
@@ -266,6 +321,22 @@ def extract_trades_from_engine(signals, bars, initial_balance=10000, pip_value=1
 
 
 if __name__ == "__main__":
+    import time as _time
     logging.basicConfig(level=logging.INFO)
-    report = run_full_backtest()
+
+    logger.info("=== Backtest Runner: batch-optimized ===")
+
+    report = run_full_backtest(months=3, max_bars=50000, timeout_seconds=300)
     print(json.dumps(report, indent=2, default=str))
+
+    if "error" not in report and not report.get("partial"):
+        logger.info("3-month backtest succeeded, trying 6 months...")
+        report_6m = run_full_backtest(months=6, max_bars=50000, timeout_seconds=300)
+        if "error" not in report_6m and not report_6m.get("partial"):
+            report = report_6m
+            print("\n=== 6-month results ===")
+            print(json.dumps(report, indent=2, default=str))
+        else:
+            logger.info("6-month backtest failed or timed out, keeping 3-month results")
+    else:
+        logger.info("3-month backtest incomplete, check report for details")

@@ -87,6 +87,7 @@ def run_walk_forward(df, initial_balance=10000, pip_value=10.0,
     window_results = []
 
     for idx, w in enumerate(windows):
+        logger.info("Walk-forward window %d/%d", idx + 1, len(windows))
         train_slice = df.iloc[w["train"][0]:w["train"][1] + 1].copy()
         test_slice = df.iloc[w["test"][0]:w["test"][1] + 1].copy()
 
