@@ -303,6 +303,7 @@ function esc(s){const d=document.createElement('div');d.textContent=s;return d.i
 function pnlC(v){return v>=0?'pnl-pos':'pnl-neg'}
 function pnlS(v){return v>=0?'+':''}
 function sig(t,t2){return'<span class="signal '+t+'">'+esc(t2)+'</span>'}
+function setProc(id,text,active){const el=$(id);if(!el)return;const row=el.closest('.process-row');if(row){const dot=row.querySelector('.live-dot');if(dot)dot.className='live-dot '+(active?'on':'off');}el.textContent=text;}
 
 async function poll(){
   try{
