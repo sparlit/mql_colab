@@ -117,9 +117,12 @@ def _generate_signals(df, baseline, sl_pips=50, tp_pips=100):
     return signals
 
 
-def run_full_backtest(symbol="EURUSD", timeframe=300, months=12,
+def run_full_backtest(symbol="EURUSD", timeframe=None, months=12,
                       initial_balance=10000, pip_value=10.0,
                       sl_pips=50, tp_pips=100):
+    if timeframe is None:
+        import MetaTrader5 as mt5
+        timeframe = mt5.TIMEFRAME_M5
     """Run complete backtest pipeline.
 
     1. Fetch historical data from MT5

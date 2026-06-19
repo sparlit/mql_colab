@@ -67,10 +67,28 @@ def fetch_historical_data(symbol, timeframe, start_date, end_date, use_cache=Tru
     end_ts = int(end_dt.timestamp())
     bars_needed = max(1, (end_ts - start_ts) // tf_seconds + 1)
 
-    rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, bars_needed)
-    if rates is None or len(rates) == 0:
-        logger.error("MT5 copy_rates_from_pos failed: %s", mt5.last_error())
+    # Try fetching in chunks if large request fails
+    all_rates = []
+    chunk_size = 50000
+    remaining = bars_needed
+    
+    while remaining > 0:
+        fetch_count = min(remaining, chunk_size)
+        rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, fetch_count)
+        if rates is None or len(rates) == 0:
+            if all_rates:
+                break  # Got some data, use what we have
+            logger.error("MT5 copy_rates_from_pos failed: %s", mt5.last_error())
+            return None
+        all_rates.extend(rates)
+        remaining -= len(rates)
+        if len(rates) < fetch_count:
+            break  # No more data available
+    
+    if not all_rates:
         return None
+    
+    rates = np.array(all_rates, dtype=rates.dtype if all_rates else None)
 
     df = pd.DataFrame(rates)
     if "time" in df.columns:
