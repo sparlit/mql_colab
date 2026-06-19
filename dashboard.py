@@ -651,8 +651,8 @@ def get_dashboard_data():
         data['bayesian_probs'] = {}
 
     # V2 context - cached (expensive MT5 + brain chain calls)
-    _v2_cache = getattr(get_dashboard_data, '_v2_cache', None)
-    _v2_cache_time = getattr(get_dashboard_data, '_v2_cache_time', 0)
+    _v2_cache = globals().get('_v2_cache', None)
+    _v2_cache_time = globals().get('_v2_cache_time', 0)
     if _v2_cache and (time.time() - _v2_cache_time) < 5:
         data.update(_v2_cache)
     else:
@@ -680,8 +680,8 @@ def get_dashboard_data():
             data['regime'] = 'unknown'; data['adx'] = 0; data['squeeze'] = False
             data['range_pct'] = 0; data['candle_patterns'] = []; data['fractal_trend'] = 'neutral'; data['z_score'] = 0
         _v2_keys = ['regime','adx','squeeze','range_pct','candle_patterns','fractal_trend','z_score']
-        get_dashboard_data._v2_cache = {k: data[k] for k in _v2_keys if k in data}
-        get_dashboard_data._v2_cache_time = time.time()
+        globals()['_v2_cache'] = {k: data[k] for k in _v2_keys if k in data}
+        globals()['_v2_cache_time'] = time.time()
 
     try:
         data['session'] = _brain.v10.v9.v8.v7.v6.v5.v4.v3.v2.session.get_current_session()
