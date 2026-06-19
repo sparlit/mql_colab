@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from config import DATA_DIR
 from backtest_data import fetch_historical_data, df_to_bars
 from ml_enhancements import RulesBaseline, EventDrivenBacktestEngine
+from ml_model import LightGBMModel
+from ml_features import compute_features, FEATURE_NAMES
 from walk_forward import run_walk_forward
 from validation_pipeline import ValidationPipeline, PHASE_CRITERIA
 
@@ -121,6 +123,37 @@ def _generate_signals(df, baseline, sl_pips=50, tp_pips=100, progress_interval=1
         signals.append(result)
         if progress_interval and (i + 1) % progress_interval == 0:
             logger.info("Signal generation: %d/%d bars (%.0f%%)", i + 1, total, (i + 1) / total * 100)
+    return signals
+
+
+def _generate_lgbm_signals(df, lgbm_model, sl_pips=50, tp_pips=100, min_confidence=0.45,
+                            progress_interval=1000):
+    """Generate signals from LightGBM model for each bar in df.
+
+    Uses ml_features.compute_features on a rolling window, then predicts.
+    Falls back to 'hold' if model not trained or features insufficient.
+    """
+    signals = []
+    min_bars = 50
+    total = len(df)
+    for i in range(total):
+        if i < min_bars:
+            signals.append({"action": "hold", "confidence": 0, "sl_pips": sl_pips, "tp_pips": tp_pips})
+            continue
+        window = df.iloc[i - min_bars:i + 1].copy()
+        feat = compute_features(window)
+        if feat is None:
+            signals.append({"action": "hold", "confidence": 0, "sl_pips": sl_pips, "tp_pips": tp_pips})
+            continue
+
+        # Build feature vector in consistent order
+        fv = np.array([feat.get(name, 0.0) for name in FEATURE_NAMES], dtype=np.float64)
+        pred = lgbm_model.predict_signal(fv, min_confidence=min_confidence)
+        pred["sl_pips"] = sl_pips
+        pred["tp_pips"] = tp_pips
+        signals.append(pred)
+        if progress_interval and (i + 1) % progress_interval == 0:
+            logger.info("LGBM signal generation: %d/%d bars (%.0f%%)", i + 1, total, (i + 1) / total * 100)
     return signals
 
 
@@ -234,6 +267,36 @@ def run_full_backtest(symbol="EURUSD", timeframe=None, months=3,
         pipeline = ValidationPipeline()
         gate_result = pipeline.evaluate_backtest(backtest_results)
         report["gate_criteria"] = gate_result
+
+        # --- LightGBM comparison ---
+        lgbm_model = LightGBMModel()
+        lgbm_loaded = lgbm_model.load()
+        if lgbm_loaded and lgbm_model.is_trained():
+            logger.info("Running LightGBM comparison...")
+            elapsed = _time.time() - pipeline_start
+            if elapsed < timeout_seconds:
+                lgbm_signals = _generate_lgbm_signals(df, lgbm_model, sl_pips, tp_pips)
+                lgbm_engine = EventDrivenBacktestEngine(
+                    spread_pips=1.5, slippage_pips=0.5, commission_per_lot=7.0,
+                )
+                lgbm_results = lgbm_engine.run(lgbm_signals, bars, initial_balance=initial_balance, pip_value=pip_value)
+                report["lgbm_backtest"] = lgbm_results
+                logger.info("LightGBM: %d trades, Sharpe=%.2f, DD=%.1f%%, PF=%.2f",
+                            lgbm_results["total_trades"], lgbm_results["sharpe_ratio"],
+                            lgbm_results["max_drawdown"], lgbm_results["profit_factor"])
+
+                # Feature importance
+                top_features = lgbm_model.get_feature_importance(top_n=15)
+                report["lgbm_feature_importance"] = [
+                    {"name": name, "importance": round(imp, 2)} for name, imp in top_features
+                ]
+                report["lgbm_train_metrics"] = lgbm_model.train_metrics
+            else:
+                logger.warning("Timeout skipping LightGBM comparison")
+                report["lgbm_skipped"] = "timeout"
+        else:
+            logger.info("No trained LightGBM model available — skipping comparison")
+            report["lgbm_skipped"] = "no_model"
 
     except Exception as e:
         logger.error("Backtest pipeline error: %s", e, exc_info=True)
