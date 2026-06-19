@@ -294,7 +294,7 @@ def train_lightgbm_walk_forward(df, n_windows=5, train_pct=0.7, num_boost_round=
     return report
 
 
-def run_training_pipeline(symbol="EURUSD", months=6, max_bars=50000, timeout_seconds=600):
+def run_training_pipeline(symbol="EURUSD", timeframe=None, months=6, max_bars=50000, timeout_seconds=600):
     """Full ML training pipeline.
 
     1. Fetch 6+ months of M5 data
@@ -319,7 +319,8 @@ def run_training_pipeline(symbol="EURUSD", months=6, max_bars=50000, timeout_sec
     logger.info("Symbol: %s, Months: %d, Max bars: %d", symbol, months, max_bars)
 
     # 1. Fetch data
-    timeframe = mt5.TIMEFRAME_M5
+    if timeframe is None:
+        timeframe = mt5.TIMEFRAME_M5
     end_date = datetime.now()
     start_date = end_date - timedelta(days=months * 30)
 
@@ -353,11 +354,21 @@ def run_training_pipeline(symbol="EURUSD", months=6, max_bars=50000, timeout_sec
 
 
 if __name__ == "__main__":
+    import sys
     import time as _time
     logging.basicConfig(level=logging.INFO)
 
+    # Parse simple args: symbol and timeframe
+    symbol = "EURUSD"
+    timeframe = None
+    for i, arg in enumerate(sys.argv[1:]):
+        if arg == "--symbol" and i + 1 < len(sys.argv) - 1:
+            symbol = sys.argv[i + 2]
+        elif arg == "--timeframe" and i + 1 < len(sys.argv) - 1:
+            timeframe = int(sys.argv[i + 2])
+
     logger.info("=== ML Training Pipeline: standalone run ===")
-    result = run_training_pipeline(months=6, max_bars=50000, timeout_seconds=600)
+    result = run_training_pipeline(symbol=symbol, timeframe=timeframe, months=6, max_bars=50000, timeout_seconds=600)
     print(json.dumps(result, indent=2, default=str))
 
     if "error" not in result:
