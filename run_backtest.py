@@ -103,31 +103,91 @@ def monte_carlo_simulation(trades, n_simulations=1000, initial_balance=10000,
     }
 
 
-def _generate_signals(df, baseline, sl_pips=50, tp_pips=100, progress_interval=1000):
+def _generate_signals(df, baseline, sl_pips=50, tp_pips=100, progress_interval=1000,
+                       use_atr_sltp=True, use_trend_filter=True):
     """Generate signals from RulesBaseline for each bar in df.
 
     Args:
         progress_interval: print progress every N bars
+        use_atr_sltp: use ATR-based dynamic SL/TP
+        use_trend_filter: only trade in direction of EMA trend
     """
     signals = []
     min_bars = 50
     total = len(df)
+
+    # Pre-compute ATR and trend for the full dataset
+    c = df["close"].values.astype(np.float64)
+    h = df["high"].values.astype(np.float64)
+    l = df["low"].values.astype(np.float64)
+    n = len(c)
+
+    atr14 = np.zeros(n)
+    tr = np.maximum(h - l, np.maximum(np.abs(h - np.roll(c, 1)), np.abs(l - np.roll(c, 1))))
+    for i in range(14, n):
+        atr14[i] = np.mean(tr[i-14:i+1])
+
+    ema50_arr = np.zeros(n)
+    ema200_arr = np.zeros(n)
+    if n > 50:
+        ema_val = np.mean(c[:50])
+        for i in range(50, n):
+            ema_val = ema_val * (1 - 2/51) + c[i] * (2/51)
+            ema50_arr[i] = ema_val
+    if n > 200:
+        ema_val = np.mean(c[:200])
+        for i in range(200, n):
+            ema_val = ema_val * (1 - 2/201) + c[i] * (2/201)
+            ema200_arr[i] = ema_val
+    else:
+        ema200_arr = ema50_arr.copy()
+
     for i in range(total):
         if i < min_bars:
             signals.append({"action": "hold", "confidence": 0, "sl_pips": sl_pips, "tp_pips": tp_pips})
             continue
         window = df.iloc[i - min_bars:i + 1].copy()
         result = baseline.evaluate(window)
-        result["sl_pips"] = sl_pips
-        result["tp_pips"] = tp_pips
+
+        # ATR-based dynamic SL/TP
+        if use_atr_sltp and atr14[i] > 0:
+            curr_sl = max(20, round(atr14[i] * 2.0 / 0.01))
+            curr_tp = max(40, round(atr14[i] * 3.5 / 0.01))
+        else:
+            curr_sl = sl_pips
+            curr_tp = tp_pips
+
+        action = result.get("action", "hold")
+
+        if use_trend_filter and action != "hold":
+            if ema50_arr[i] > 0 and ema200_arr[i] > 0:
+                if action == "buy" and ema50_arr[i] < ema200_arr[i]:
+                    action = "hold"
+                elif action == "sell" and ema50_arr[i] > ema200_arr[i]:
+                    action = "hold"
+
+        # Session filter: suppress during low-liquidity hours
+        if action != "hold" and "time" in df.columns:
+            bar_time = df["time"].iloc[i]
+            try:
+                bar_dt = datetime.fromtimestamp(int(bar_time))
+                hour = bar_dt.hour
+                if hour >= 21 or hour < 1:
+                    action = "hold"
+            except (OSError, ValueError, TypeError, OverflowError):
+                pass
+
+        result["action"] = action
+        result["sl_pips"] = curr_sl
+        result["tp_pips"] = curr_tp
         signals.append(result)
         if progress_interval and (i + 1) % progress_interval == 0:
             logger.info("Signal generation: %d/%d bars (%.0f%%)", i + 1, total, (i + 1) / total * 100)
     return signals
 
 
-def _generate_lgbm_signals(df, lgbm_model, sl_pips=50, tp_pips=100, min_confidence=0.45,
-                            progress_interval=1000):
+def _generate_lgbm_signals(df, lgbm_model, sl_pips=50, tp_pips=100, min_confidence=0.65,
+                            progress_interval=1000, use_atr_sltp=True, use_trend_filter=True):
     """Generate signals from LightGBM model for each bar in df.
 
     Uses ml_features.compute_features on a rolling window, then predicts.
@@ -136,6 +196,33 @@ def _generate_lgbm_signals(df, lgbm_model, sl_pips=50, tp_pips=100, min_confiden
     signals = []
     min_bars = 50
     total = len(df)
+
+    # Pre-compute ATR and trend for SL/TP and filtering
+    c = df["close"].values.astype(np.float64)
+    h = df["high"].values.astype(np.float64)
+    l = df["low"].values.astype(np.float64)
+    n = len(c)
+
+    atr14 = np.zeros(n)
+    tr = np.maximum(h - l, np.maximum(np.abs(h - np.roll(c, 1)), np.abs(l - np.roll(c, 1))))
+    for i in range(14, n):
+        atr14[i] = np.mean(tr[i-14:i+1])
+
+    ema50_arr = np.zeros(n)
+    ema200_arr = np.zeros(n)
+    if n > 50:
+        ema_val = np.mean(c[:50])
+        for i in range(50, n):
+            ema_val = ema_val * (1 - 2/51) + c[i] * (2/51)
+            ema50_arr[i] = ema_val
+    if n > 200:
+        ema_val = np.mean(c[:200])
+        for i in range(200, n):
+            ema_val = ema_val * (1 - 2/201) + c[i] * (2/201)
+            ema200_arr[i] = ema_val
+    else:
+        ema200_arr = ema50_arr.copy()
+
     for i in range(total):
         if i < min_bars:
             signals.append({"action": "hold", "confidence": 0, "sl_pips": sl_pips, "tp_pips": tp_pips})
@@ -149,8 +236,38 @@ def _generate_lgbm_signals(df, lgbm_model, sl_pips=50, tp_pips=100, min_confiden
         # Build feature vector in consistent order
         fv = np.array([feat.get(name, 0.0) for name in FEATURE_NAMES], dtype=np.float64)
         pred = lgbm_model.predict_signal(fv, min_confidence=min_confidence)
-        pred["sl_pips"] = sl_pips
-        pred["tp_pips"] = tp_pips
+
+        # ATR-based dynamic SL/TP
+        if use_atr_sltp and atr14[i] > 0:
+            curr_sl = max(20, round(atr14[i] * 2.0 / 0.01))
+            curr_tp = max(40, round(atr14[i] * 3.5 / 0.01))
+        else:
+            curr_sl = sl_pips
+            curr_tp = tp_pips
+
+        # Trend filter
+        action = pred.get("action", "hold")
+        if use_trend_filter and action != "hold":
+            if ema50_arr[i] > 0 and ema200_arr[i] > 0:
+                if action == "buy" and ema50_arr[i] < ema200_arr[i]:
+                    action = "hold"
+                elif action == "sell" and ema50_arr[i] > ema200_arr[i]:
+                    action = "hold"
+
+        # Session filter
+        if action != "hold" and "time" in df.columns:
+            bar_time = df["time"].iloc[i]
+            try:
+                bar_dt = datetime.fromtimestamp(int(bar_time))
+                hour = bar_dt.hour
+                if hour >= 21 or hour < 1:
+                    action = "hold"
+            except (OSError, ValueError, TypeError, OverflowError):
+                pass
+
+        pred["action"] = action
+        pred["sl_pips"] = curr_sl
+        pred["tp_pips"] = curr_tp
         signals.append(pred)
         if progress_interval and (i + 1) % progress_interval == 0:
             logger.info("LGBM signal generation: %d/%d bars (%.0f%%)", i + 1, total, (i + 1) / total * 100)
@@ -182,7 +299,7 @@ def run_full_backtest(symbol="EURUSD", timeframe=None, months=3,
     pipeline_start = _time.time()
 
     if timeframe is None:
-        import MetaTrader5 as mt5
+        import mt5_mcp as mt5
         timeframe = mt5.TIMEFRAME_M5
 
     end_date = datetime.now()

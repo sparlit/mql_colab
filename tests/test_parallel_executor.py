@@ -33,14 +33,11 @@ class TestParallelExecutor:
     """Tests for ParallelExecutor class."""
     
     def test_initialization(self):
-        """Test that executor initializes correctly."""
-        executor = ParallelExecutor()
-        assert not executor._initialized
-        executor.initialize()
+        """Test that executor initializes correctly and pools are available."""
+        executor = get_executor()
         assert executor._initialized
-        assert executor._process_pool is not None
-        assert executor._io_pool is not None
-        executor.shutdown(wait=True)
+        assert "model" in executor._pools
+        assert "io" in executor._pools
     
     def test_singleton_pattern(self):
         """Test that get_executor returns singleton."""
@@ -100,19 +97,21 @@ class TestParallelExecutor:
         """Test that statistics are tracked correctly."""
         executor = get_executor()
         executor.reset_stats()
-        
+
         executor.submit_cpu_task(simple_cpu_task, 5)
         stats = executor.get_stats()
-        
-        assert stats["process_tasks_submitted"] == 1
-        assert stats["process_tasks_completed"] == 1
-        assert stats["process_tasks_failed"] == 0
+
+        assert stats["model"]["tasks_submitted"] == 1
+        assert stats["model"]["tasks_completed"] == 1
+        assert stats["model"]["tasks_failed"] == 0
     
     def test_shutdown(self):
-        """Test that executor shuts down cleanly."""
+        """Test that executor shuts down cleanly and subsequent calls get fresh instance."""
         executor = get_executor()
         executor.shutdown(wait=True)
-        assert not executor._initialized
+        new_executor = get_executor()
+        assert new_executor is not executor
+        assert not new_executor._shutdown.is_set()
     
     def test_submit_analysis_task(self):
         """Test analysis task submission."""

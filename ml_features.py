@@ -23,6 +23,7 @@ FEATURE_NAMES = [
     "hour_sin", "hour_cos", "dow_sin", "dow_cos",
     "volume_sma_ratio", "price_range_position",
     "consecutive_up", "consecutive_down",
+    "trend_ema50_200", "adx_strength", "rsi_from_50",
 ]
 
 
@@ -188,6 +189,30 @@ def compute_features(df):
     features["consecutive_up"] = up_count
     features["consecutive_down"] = down_count
 
+    # Trend features: EMA50/200 alignment and ADX strength
+    ema50 = ema(c, 50) if n > 50 else np.full(n, c[-1])
+    ema200 = ema(c, 200) if n > 200 else ema50
+    features["trend_ema50_200"] = float(np.sign(ema50[-1] - ema200[-1]))
+
+    # ADX approximation using directional movement
+    if n > 20:
+        plus_dm = np.maximum(np.diff(h, prepend=h[0]), 0)
+        minus_dm = np.maximum(-np.diff(l, prepend=l[0]), 0)
+        tr_arr = np.maximum(h - l, np.maximum(np.abs(h - np.roll(c, 1)), np.abs(l - np.roll(c, 1))))
+        atr20 = float(np.mean(tr_arr[-20:]))
+        if atr20 > 0:
+            plus_di = float(np.mean(plus_dm[-14:])) / atr20 * 100
+            minus_di = float(np.mean(minus_dm[-14:])) / atr20 * 100
+            dx = abs(plus_di - minus_di) / max(plus_di + minus_di, 1e-10) * 100
+            features["adx_strength"] = dx
+        else:
+            features["adx_strength"] = 0
+    else:
+        features["adx_strength"] = 0
+
+    # RSI distance from 50 (neutral) — directional bias signal
+    features["rsi_from_50"] = features["rsi"] - 50.0
+
     return features
 
 
@@ -223,23 +248,42 @@ def compute_features_batch(df):
 def compute_target(df, forward_bars=3, threshold_pct=0.01):
     """Compute target variable: next-bar direction.
 
+    Uses ATR-adaptive threshold when available — labels are relative to
+    current volatility instead of fixed percentage.
+
     Args:
         df: OHLCV DataFrame
         forward_bars: number of bars to look forward for return
-        threshold_pct: minimum return % to label as buy/sell (otherwise hold)
+        threshold_pct: minimum return % to label as buy/sell (fallback)
 
     Returns:
         numpy array of labels: 1 (buy/up), -1 (sell/down), 0 (hold/flat)
     """
     c = df["close"].values.astype(np.float64)
+    h = df["high"].values.astype(np.float64)
+    l = df["low"].values.astype(np.float64)
     n = len(c)
     labels = np.zeros(n, dtype=np.int32)
 
     for i in range(n - forward_bars):
         future_return = (c[i + forward_bars] - c[i]) / c[i] * 100 if c[i] != 0 else 0
-        if future_return > threshold_pct:
+
+        # ATR-adaptive threshold: use half ATR as minimum move
+        if i >= 14 and c[i] > 0:
+            tr = max(h[i] - l[i], max(abs(h[i] - c[i-1]), abs(l[i] - c[i-1])))
+            atr_val = tr
+            for j in range(max(0, i-13), i):
+                tr_j = max(h[j] - l[j], max(abs(h[j] - c[j-1]) if j > 0 else 0, abs(l[j] - c[j-1]) if j > 0 else 0))
+                atr_val = max(atr_val, tr_j)
+            adaptive_threshold = (atr_val / c[i]) * 50  # 0.5x ATR in percentage
+        else:
+            adaptive_threshold = threshold_pct
+
+        threshold = max(adaptive_threshold, threshold_pct)
+
+        if future_return > threshold:
             labels[i] = 1
-        elif future_return < -threshold_pct:
+        elif future_return < -threshold:
             labels[i] = -1
         else:
             labels[i] = 0

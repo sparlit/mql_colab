@@ -29,7 +29,7 @@ def fetch_closed_rates(symbol, timeframe, count):
     Returns:
         numpy array of closed bars only, or None on failure
     """
-    import MetaTrader5 as mt5
+    import mt5_mcp as mt5
     rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count + 1)
     if rates is None or len(rates) < 2:
         return rates
@@ -171,7 +171,7 @@ def is_market_open():
             - terminal_trade_allowed (bool): MT5 terminal trade permission
             - symbol_trade_mode (int): Symbol trade mode
     """
-    import MetaTrader5 as mt5
+    import mt5_mcp as mt5
 
     result = {
         "open": False,
@@ -203,7 +203,7 @@ def is_symbol_tradeable(symbol):
             - reason (str): Explanation if not tradeable
             - trade_mode (int): MT5 symbol trade mode
     """
-    import MetaTrader5 as mt5
+    import mt5_mcp as mt5
 
     result = {
         "tradeable": False,
@@ -239,7 +239,7 @@ def validate_rate_freshness(rates, timeframe):
             - last_bar_time (datetime): Timestamp of last bar
             - age_seconds (float): How old the last bar is
     """
-    import MetaTrader5 as mt5
+    import mt5_mcp as mt5
 
     result = {
         "fresh": False,
@@ -286,7 +286,7 @@ def validate_tick_freshness(tick, symbol=None):
             - reason (str): Explanation if stale
             - age_seconds (float): How old the tick is
     """
-    import MetaTrader5 as mt5
+    import mt5_mcp as mt5
 
     result = {
         "fresh": False,
@@ -347,7 +347,7 @@ def validate_market_state(symbol, timeframe=None):
             - rates_ok (bool) — only if timeframe provided
             - tick_ok (bool)
     """
-    import MetaTrader5 as mt5
+    import mt5_mcp as mt5
 
     result = {
         "can_trade": False,

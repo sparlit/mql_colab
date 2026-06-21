@@ -11,12 +11,21 @@ services:
       - ./mt5_data:/root/.local/share/MetaQuotes
     environment:
       - PYTHONUNBUFFERED=1
+      - ACTIVE_STRATEGY_MODE=${ACTIVE_STRATEGY_MODE:-SWING}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://myuser:mypassword@postgres:5432/mydb}
     restart: unless-stopped
+    stop_grace_period: 30s
     deploy:
       resources:
         limits:
           cpus: '4'
           memory: 4G
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8050/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   prometheus:
     image: prom/prometheus:latest
@@ -25,7 +34,12 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
     restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
 
   grafana:
     image: grafana/grafana:latest
@@ -34,9 +48,32 @@ services:
       - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_SERVER_ROOT_URL=http://localhost:3000
     volumes:
       - grafana_data:/var/lib/grafana
     restart: unless-stopped
+    depends_on:
+      - prometheus
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=myuser
+      - POSTGRES_PASSWORD=mypassword
+      - POSTGRES_DB=mydb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myuser -d mydb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
+  pg_data:
   grafana_data:
+  prometheus_data:

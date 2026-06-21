@@ -3,7 +3,7 @@ Brain V11 - Autonomous Meta-Brain Orchestrator
 Detects market regime and dynamically selects optimal trading method.
 Wraps all 10 existing brains plus 11 trading method engines.
 """
-import MetaTrader5 as mt5
+import mt5_mcp as mt5
 import numpy as np
 import threading
 import copy

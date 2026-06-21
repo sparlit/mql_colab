@@ -22,7 +22,7 @@ def fetch_mt5_rates(symbol: str, timeframe: int, count: int = 300) -> Optional[o
     Returns:
         DataFrame with OHLCV data or None
     """
-    import MetaTrader5 as mt5
+    import mt5_mcp as mt5
     
     try:
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
@@ -43,7 +43,7 @@ def fetch_mt5_symbol_info(symbol: str) -> Optional[Dict]:
     Returns:
         Dictionary with symbol info or None
     """
-    import MetaTrader5 as mt5
+    import mt5_mcp as mt5
     
     try:
         info = mt5.symbol_info(symbol)
@@ -78,7 +78,7 @@ def fetch_multiple_symbols(symbols: List[str]) -> Dict[str, Any]:
     Returns:
         Dictionary mapping symbol to its info
     """
-    import MetaTrader5 as mt5
+    import mt5_mcp as mt5
     
     results = {}
     for symbol in symbols:

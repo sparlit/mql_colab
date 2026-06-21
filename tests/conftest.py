@@ -134,6 +134,7 @@ def mock_mt5(monkeypatch):
     mock.symbols_get = MagicMock(return_value=[MagicMock(name="EURUSD"), MagicMock(name="GBPUSD")])
 
     monkeypatch.setitem(sys.modules, 'MetaTrader5', mock)
+    monkeypatch.setitem(sys.modules, 'mt5_mcp', mock)
     return mock
 
 

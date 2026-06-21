@@ -178,6 +178,19 @@ class LightGBMModel:
         # Handle NaN — fill with 0
         X = np.nan_to_num(X, nan=0.0)
 
+        # Handle feature count mismatch: pad with zeros or truncate
+        model_n_features = self.model.num_feature()
+        input_n_features = X.shape[1]
+        if input_n_features < model_n_features:
+            # Pad with zeros
+            pad = np.zeros((X.shape[0], model_n_features - input_n_features), dtype=np.float64)
+            X = np.concatenate([X, pad], axis=1)
+            logger.debug("Predict: padded features %d -> %d", input_n_features, model_n_features)
+        elif input_n_features > model_n_features:
+            # Truncate extra features
+            X = X[:, :model_n_features]
+            logger.debug("Predict: truncated features %d -> %d", input_n_features, model_n_features)
+
         probs = self.model.predict(X)
 
         if single:

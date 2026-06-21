@@ -1,4 +1,4 @@
-import MetaTrader5 as mt5
+import mt5_mcp as mt5
 import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta

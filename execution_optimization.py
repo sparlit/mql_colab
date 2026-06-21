@@ -1,4 +1,4 @@
-import MetaTrader5 as mt5
+import mt5_mcp as mt5
 import numpy as np
 import time as _time
 import threading
