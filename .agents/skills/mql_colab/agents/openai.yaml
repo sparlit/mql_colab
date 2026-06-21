@@ -1,0 +1,6 @@
+interface:
+  display_name: "Mql Colab"
+  short_description: "Repo-specific patterns and workflows for mql_colab"
+  default_prompt: "Use the mql_colab repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true
