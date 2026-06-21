@@ -528,6 +528,7 @@ class ParallelExecutor:
         return self.map(_run_one, indicator_fns, pool="analysis", timeout_per_item=5.0)
 
     # ─── Shutdown ────────────────────────────────────────────────
+# PR: fix-logging-shutdown
 
     def shutdown(self, wait: bool = True, timeout: float = 30.0) -> None:
         """Graceful shutdown of all pools, suppress logging errors during interpreter exit."""
