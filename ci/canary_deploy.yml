@@ -1,0 +1,29 @@
+name: Canary Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Build Docker image
+        run: |
+          docker build -t myrepo/autotrader:${{ github.sha }} .
+      - name: Deploy to Staging Environment
+        run: |
+          echo "Deploying Docker image to staging (placeholder)"
+      - name: Run Smoke Tests
+        run: |
+          python ci/smoke_test.py
+      - name: Promote to Production
+        if: success()
+        run: |
+          echo "Promoting Docker image to production (placeholder)"
