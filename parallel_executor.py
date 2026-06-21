@@ -530,25 +530,37 @@ class ParallelExecutor:
     # ─── Shutdown ────────────────────────────────────────────────
 
     def shutdown(self, wait: bool = True, timeout: float = 30.0) -> None:
-        """Graceful shutdown of all pools."""
+        """Graceful shutdown of all pools, suppress logging errors during interpreter exit."""
+        # Disable logger to avoid errors when handlers are closed
+        logger.disabled = True
+
         if self._shutdown.is_set():
             return
         self._shutdown.set()
 
-        logger.info("ParallelExecutor shutting down (wait=%s, timeout=%s)", wait, timeout)
+        try:
+            logger.info("ParallelExecutor shutting down (wait=%s, timeout=%s)", wait, timeout)
+        except Exception:
+            pass
         start = time.monotonic()
 
         for name, pool in self._pools.items():
             remaining = timeout - (time.monotonic() - start)
             if remaining <= 0:
-                logger.warning("Shutdown timeout exceeded, forcing pool %s shutdown", name)
+                try:
+                    logger.warning("Shutdown timeout exceeded, forcing pool %s shutdown", name)
+                except Exception:
+                    pass
                 pool.shutdown(wait=False, cancel_futures=True)
             else:
                 pool.shutdown(wait=wait and remaining > 0, cancel_futures=True)
 
         self._setup_complete = False
         ParallelExecutor._instance = None
-        logger.info("ParallelExecutor shutdown complete")
+        try:
+            logger.info("ParallelExecutor shutdown complete")
+        except Exception:
+            pass
 
     def is_shutting_down(self) -> bool:
         return self._shutdown.is_set()
