@@ -61,7 +61,8 @@ def _compute_sharpe(pnls):
 
 def train_lightgbm_walk_forward(df, n_windows=5, train_pct=0.7, num_boost_round=200,
                                  forward_bars=3, threshold_pct=0.01, initial_balance=10000,
-                                 pip_value=10.0, sl_pips=50, tp_pips=100, model_path=None):
+                                 pip_value=10.0, sl_pips=None, tp_pips=None, model_path=None,
+                                 min_confidence=0.55, use_atr_sltp=True, use_trend_filter=True):
     """Walk-forward train LightGBM model.
 
     Args:
@@ -73,9 +74,12 @@ def train_lightgbm_walk_forward(df, n_windows=5, train_pct=0.7, num_boost_round=
         threshold_pct: threshold for buy/sell label
         initial_balance: backtest starting capital
         pip_value: pip value per lot
-        sl_pips: stop loss pips
-        tp_pips: take profit pips
+        sl_pips: stop loss pips (None = auto from ATR)
+        tp_pips: take profit pips (None = auto from ATR)
         model_path: path to save model (default: brain_data/ml_model.json)
+        min_confidence: minimum model confidence to enter trade (0-1)
+        use_atr_sltp: use ATR-based dynamic SL/TP instead of fixed
+        use_trend_filter: only trade in direction of EMA50/200 trend
 
     Returns:
         dict with training results, metrics, and saved paths
@@ -146,16 +150,76 @@ def train_lightgbm_walk_forward(df, n_windows=5, train_pct=0.7, num_boost_round=
         orig_test_start = test_start + (len(df) - len(X_all))
         orig_test_end = test_start + (len(df) - len(X_all)) + len(X_test)
 
+        # Pre-compute ATR and trend for the test slice
+        test_slice = df.iloc[orig_test_start:orig_test_end].copy()
+        if use_atr_sltp and len(test_slice) >= 20:
+            tr = np.maximum(
+                test_slice["high"].values - test_slice["low"].values,
+                np.maximum(
+                    np.abs(test_slice["high"].values - np.roll(test_slice["close"].values, 1)),
+                    np.abs(test_slice["low"].values - np.roll(test_slice["close"].values, 1))
+                )
+            )
+            test_slice["_atr14"] = pd.Series(tr).rolling(14).mean().values
+
+        if use_trend_filter and len(test_slice) >= 50:
+            test_slice["_ema50"] = test_slice["close"].ewm(span=50).mean().values
+            test_slice["_ema200"] = test_slice["close"].ewm(span=min(200, len(test_slice) - 1)).mean().values
+
         signals = []
         for i in range(len(X_test)):
             pred = pred_labels[i]
             action = "buy" if pred == 1 else "sell" if pred == -1 else "hold"
             confidence = float(np.max(test_preds[i]))
+
+            # Confidence gate: skip low-confidence trades
+            if action != "hold" and confidence < min_confidence:
+                action = "hold"
+
+            # Trend filter: only trade in direction of EMA alignment
+            if use_trend_filter and action != "hold" and len(test_slice) > 0:
+                idx_in_slice = min(i, len(test_slice) - 1)
+                if "_ema50" in test_slice.columns and "_ema200" in test_slice.columns:
+                    ema50_val = test_slice["_ema50"].iloc[idx_in_slice]
+                    ema200_val = test_slice["_ema200"].iloc[idx_in_slice]
+                    if action == "buy" and ema50_val < ema200_val:
+                        action = "hold"  # Counter-trend: suppress
+                    elif action == "sell" and ema50_val > ema200_val:
+                        action = "hold"  # Counter-trend: suppress
+
+            # Session filter: suppress trades during low-liquidity Asian session
+            if action != "hold" and len(test_slice) > 0:
+                idx_in_slice = min(i, len(test_slice) - 1)
+                if "time" in test_slice.columns:
+                    bar_time = test_slice["time"].iloc[idx_in_slice]
+                    try:
+                        bar_dt = datetime.fromtimestamp(bar_time) if isinstance(bar_time, (int, float)) else bar_time
+                        hour = bar_dt.hour
+                        # Suppress during Asian low-liquidity: 21:00-01:00 UTC
+                        if hour >= 21 or hour < 1:
+                            action = "hold"
+                    except (OSError, ValueError, TypeError):
+                        pass  # Skip filter if time parsing fails
+
+            # ATR-based dynamic SL/TP
+            if use_atr_sltp and "_atr14" in test_slice.columns:
+                idx_in_slice = min(i, len(test_slice) - 1)
+                atr_val = test_slice["_atr14"].iloc[idx_in_slice]
+                if atr_val > 0:
+                    curr_sl_pips = max(20, round(atr_val * 2.0 / 0.01))  # 2.0x ATR (wider)
+                    curr_tp_pips = max(40, round(atr_val * 3.5 / 0.01))  # 3.5x ATR (1.75:1 RR)
+                else:
+                    curr_sl_pips = sl_pips or 50
+                    curr_tp_pips = tp_pips or 100
+            else:
+                curr_sl_pips = sl_pips or 50
+                curr_tp_pips = tp_pips or 100
+
             signals.append({
                 "action": action,
                 "confidence": round(confidence, 4),
-                "sl_pips": sl_pips,
-                "tp_pips": tp_pips,
+                "sl_pips": curr_sl_pips,
+                "tp_pips": curr_tp_pips,
             })
 
         # Build bars for this window from original df
@@ -166,6 +230,15 @@ def train_lightgbm_walk_forward(df, n_windows=5, train_pct=0.7, num_boost_round=
 
         test_bars = df_to_bars(test_slice)
         backtest_result = _evaluate_signals_on_bars(signals, test_bars, initial_balance, pip_value)
+
+        # Infer pip_size from price level
+        median_close = float(test_slice["close"].median()) if len(test_slice) > 0 else 1.0
+        if median_close > 50:
+            _pip_size = 0.01
+        elif median_close > 0.5:
+            _pip_size = 0.0001
+        else:
+            _pip_size = 0.00001
 
         # Collect trade P&Ls for Sharpe
         trades = []
@@ -184,23 +257,27 @@ def train_lightgbm_walk_forward(df, n_windows=5, train_pct=0.7, num_boost_round=
             for pos in positions:
                 if pos["type"] == "BUY":
                     if low <= pos["sl"]:
-                        pnl = (pos["sl"] - pos["entry"]) * pos["lots"] * pip_value - pos["commission"]
+                        pnl_pips = (pos["sl"] - pos["entry"]) / _pip_size
+                        pnl = pnl_pips * pos["lots"] * pip_value - pos["commission"]
                         balance += pnl
                         trades.append(pnl)
                         closed.append(pos)
                     elif high >= pos["tp"]:
-                        pnl = (pos["tp"] - pos["entry"]) * pos["lots"] * pip_value - pos["commission"]
+                        pnl_pips = (pos["tp"] - pos["entry"]) / _pip_size
+                        pnl = pnl_pips * pos["lots"] * pip_value - pos["commission"]
                         balance += pnl
                         trades.append(pnl)
                         closed.append(pos)
                 else:
                     if high >= pos["sl"]:
-                        pnl = (pos["entry"] - pos["sl"]) * pos["lots"] * pip_value - pos["commission"]
+                        pnl_pips = (pos["entry"] - pos["sl"]) / _pip_size
+                        pnl = pnl_pips * pos["lots"] * pip_value - pos["commission"]
                         balance += pnl
                         trades.append(pnl)
                         closed.append(pos)
                     elif low <= pos["tp"]:
-                        pnl = (pos["entry"] - pos["tp"]) * pos["lots"] * pip_value - pos["commission"]
+                        pnl_pips = (pos["entry"] - pos["tp"]) / _pip_size
+                        pnl = pnl_pips * pos["lots"] * pip_value - pos["commission"]
                         balance += pnl
                         trades.append(pnl)
                         closed.append(pos)
@@ -209,22 +286,25 @@ def train_lightgbm_walk_forward(df, n_windows=5, train_pct=0.7, num_boost_round=
 
             if sig.get("action") in ("buy", "sell") and len(positions) < 5:
                 confidence = sig.get("confidence", 0.5)
+                sig_sl = sig.get("sl_pips", 50)
+                sig_tp = sig.get("tp_pips", 100)
                 risk_amount = balance * 0.01 * min(confidence, 1.0)
-                sl_distance = sl_pips * pip_value
-                lots = max(0.01, round(risk_amount / sl_distance, 2))
+                sl_distance_price = sig_sl * _pip_size
+                lots = max(0.01, round(risk_amount / (sl_distance_price * pip_value / _pip_size), 2))
+                lots = max(0.01, lots)
                 spread_cost = spread * pip_value * lots
                 commission = 7.0 * lots + spread_cost + 0.5 * pip_value * lots
 
                 if sig["action"] == "buy":
-                    entry = close + (spread / 2 * pip_value / lots)
-                    sl = entry - sl_pips * pip_value / lots
-                    tp = entry + tp_pips * pip_value / lots
+                    entry = close + (spread / 2 * _pip_size)
+                    sl = entry - sig_sl * _pip_size
+                    tp = entry + sig_tp * _pip_size
                     positions.append({"type": "BUY", "entry": entry, "sl": sl, "tp": tp,
                                       "lots": lots, "commission": commission})
                 else:
-                    entry = close - (spread / 2 * pip_value / lots)
-                    sl = entry + sl_pips * pip_value / lots
-                    tp = entry - tp_pips * pip_value / lots
+                    entry = close - (spread / 2 * _pip_size)
+                    sl = entry + sig_sl * _pip_size
+                    tp = entry - sig_tp * _pip_size
                     positions.append({"type": "SELL", "entry": entry, "sl": sl, "tp": tp,
                                       "lots": lots, "commission": commission})
 
@@ -312,7 +392,7 @@ def run_training_pipeline(symbol="EURUSD", timeframe=None, months=6, max_bars=50
     Returns:
         dict with full training report
     """
-    import MetaTrader5 as mt5
+    import mt5_mcp as mt5
     pipeline_start = _time.time()
 
     logger.info("=== ML Training Pipeline ===")
@@ -337,10 +417,11 @@ def run_training_pipeline(symbol="EURUSD", timeframe=None, months=6, max_bars=50
     if elapsed > timeout_seconds:
         return {"error": f"Timeout after data fetch ({elapsed:.0f}s)"}
 
-    # 2-4. Walk-forward training
+    # 2-4. Walk-forward training with improved strategy
     result = train_lightgbm_walk_forward(
         df, n_windows=5, train_pct=0.7, num_boost_round=200,
         forward_bars=3, threshold_pct=0.01,
+        min_confidence=0.65, use_atr_sltp=True, use_trend_filter=True,
     )
 
     result["data_bars"] = len(df)

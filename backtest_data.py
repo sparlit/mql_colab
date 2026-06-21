@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
-import MetaTrader5 as mt5
+import mt5_mcp as mt5
 from config import DATA_DIR, MT5_TIMEFRAMES
 
 logger = logging.getLogger(__name__)

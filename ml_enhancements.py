@@ -6,7 +6,7 @@ import threading
 import logging
 from collections import deque
 from datetime import datetime
-import MetaTrader5 as mt5
+import mt5_mcp as mt5
 from config import DATA_DIR
 
 logger = logging.getLogger(__name__)
@@ -466,19 +466,44 @@ class EventDrivenBacktestEngine:
         self.commission_per_lot = commission_per_lot
         self.risk_per_trade = risk_per_trade
         self.max_positions = max_positions
+        self._last_trade_bar = -100
+        self._cooldown_bars = 24  # Min bars between new trades (2 hours on M5)
 
-    def run(self, signals, bars, initial_balance=10000, pip_value=10.0):
+    @staticmethod
+    def _infer_pip_size(bars):
+        """Infer pip size from median price level.
+
+        JPY-like pairs (price > 50): pip_size = 0.01
+        Standard forex (price > 0.5): pip_size = 0.0001
+        Micro/altcoin (price <= 0.5): pip_size = 0.00001
+        """
+        if not bars:
+            return 0.0001
+        median_close = np.median([b["close"] for b in bars])
+        if median_close > 50:
+            return 0.01
+        elif median_close > 0.5:
+            return 0.0001
+        else:
+            return 0.00001
+
+    def run(self, signals, bars, initial_balance=10000, pip_value=10.0, pip_size=None):
         """Run event-driven backtest.
 
         Args:
             signals: list of dicts with 'action' (buy/sell/hold), 'confidence', 'sl_pips', 'tp_pips'
             bars: list of dicts with 'time', 'open', 'high', 'low', 'close', 'spread' (optional)
             initial_balance: starting balance
-            pip_value: value of 1 pip per lot (e.g., 10 for EURUSD)
+            pip_value: value of 1 pip per lot in dollars (e.g., 10 for EURUSD)
+            pip_size: price increment per pip (e.g., 0.0001 for EURUSD, 0.01 for JPY pairs).
+                      Auto-inferred from price if None.
 
         Returns:
             dict with metrics
         """
+        if pip_size is None:
+            pip_size = self._infer_pip_size(bars)
+
         balance = initial_balance
         equity_curve = [balance]
         trades = []
@@ -499,39 +524,47 @@ class EventDrivenBacktestEngine:
             for pos in positions:
                 if pos["type"] == "BUY":
                     if low <= pos["sl"]:
-                        pnl = (pos["sl"] - pos["entry"]) * pos["lots"] * pip_value - pos["commission"]
+                        pnl_pips = (pos["sl"] - pos["entry"]) / pip_size
+                        pnl = pnl_pips * pos["lots"] * pip_value - pos["commission"]
                         balance += pnl
-                        trades.append({"result": "loss", "pnl": pnl, "bars_held": i - pos["open_bar"]})
+                        trades.append({"result": "loss", "pnl": pnl, "pnl_pips": pnl_pips, "bars_held": i - pos["open_bar"]})
                         closed_positions.append(pos)
                     elif high >= pos["tp"]:
-                        pnl = (pos["tp"] - pos["entry"]) * pos["lots"] * pip_value - pos["commission"]
+                        pnl_pips = (pos["tp"] - pos["entry"]) / pip_size
+                        pnl = pnl_pips * pos["lots"] * pip_value - pos["commission"]
                         balance += pnl
-                        trades.append({"result": "win", "pnl": pnl, "bars_held": i - pos["open_bar"]})
+                        trades.append({"result": "win", "pnl": pnl, "pnl_pips": pnl_pips, "bars_held": i - pos["open_bar"]})
                         closed_positions.append(pos)
                 else:  # SELL
                     if high >= pos["sl"]:
-                        pnl = (pos["entry"] - pos["sl"]) * pos["lots"] * pip_value - pos["commission"]
+                        pnl_pips = (pos["entry"] - pos["sl"]) / pip_size
+                        pnl = pnl_pips * pos["lots"] * pip_value - pos["commission"]
                         balance += pnl
-                        trades.append({"result": "loss", "pnl": pnl, "bars_held": i - pos["open_bar"]})
+                        trades.append({"result": "loss", "pnl": pnl, "pnl_pips": pnl_pips, "bars_held": i - pos["open_bar"]})
                         closed_positions.append(pos)
                     elif low <= pos["tp"]:
-                        pnl = (pos["entry"] - pos["tp"]) * pos["lots"] * pip_value - pos["commission"]
+                        pnl_pips = (pos["entry"] - pos["tp"]) / pip_size
+                        pnl = pnl_pips * pos["lots"] * pip_value - pos["commission"]
                         balance += pnl
-                        trades.append({"result": "win", "pnl": pnl, "bars_held": i - pos["open_bar"]})
+                        trades.append({"result": "win", "pnl": pnl, "pnl_pips": pnl_pips, "bars_held": i - pos["open_bar"]})
                         closed_positions.append(pos)
             for pos in closed_positions:
                 positions.remove(pos)
 
             # Open new position on signal
             if signal.get("action") in ("buy", "sell") and len(positions) < self.max_positions:
+                # Cooldown: prevent overtrading
+                if i - self._last_trade_bar < self._cooldown_bars:
+                    continue
                 sl_pips = signal.get("sl_pips", 50)
                 tp_pips = signal.get("tp_pips", 100)
                 confidence = signal.get("confidence", 0.5)
 
-                # Calculate lot size based on risk
+                # Calculate lot size based on risk (risk is in pips, convert to price for sizing)
                 risk_amount = balance * self.risk_per_trade * min(confidence, 1.0)
-                sl_distance = sl_pips * pip_value
-                lots = max(0.01, round(risk_amount / sl_distance, 2))
+                sl_distance_price = sl_pips * pip_size
+                lots = max(0.01, round(risk_amount / (sl_distance_price * pip_value / pip_size), 2))
+                lots = max(0.01, lots)
 
                 # Apply spread and slippage to entry
                 spread_cost = spread * pip_value * lots
@@ -539,29 +572,31 @@ class EventDrivenBacktestEngine:
                 commission = self.commission_per_lot * lots + spread_cost + slippage_cost
 
                 if signal["action"] == "buy":
-                    entry = close + (spread / 2 * pip_value / lots)  # Buy at ask
-                    sl = entry - sl_pips * pip_value / lots
-                    tp = entry + tp_pips * pip_value / lots
+                    entry = close + (spread / 2 * pip_size)  # Buy at ask
+                    sl = entry - sl_pips * pip_size
+                    tp = entry + tp_pips * pip_size
                     positions.append({
                         "type": "BUY", "entry": entry, "sl": sl, "tp": tp,
                         "lots": lots, "commission": commission, "open_bar": i,
                     })
+                    self._last_trade_bar = i
                 else:
-                    entry = close - (spread / 2 * pip_value / lots)  # Sell at bid
-                    sl = entry + sl_pips * pip_value / lots
-                    tp = entry - tp_pips * pip_value / lots
+                    entry = close - (spread / 2 * pip_size)  # Sell at bid
+                    sl = entry + sl_pips * pip_size
+                    tp = entry - tp_pips * pip_size
                     positions.append({
                         "type": "SELL", "entry": entry, "sl": sl, "tp": tp,
                         "lots": lots, "commission": commission, "open_bar": i,
                     })
+                    self._last_trade_bar = i
 
-            # Track equity (unrealized P&L)
+            # Track equity (unrealized P&L) — convert price diff to pips
             unrealized = 0
             for pos in positions:
                 if pos["type"] == "BUY":
-                    unrealized += (close - pos["entry"]) * pos["lots"] * pip_value
+                    unrealized += (close - pos["entry"]) / pip_size * pos["lots"] * pip_value
                 else:
-                    unrealized += (pos["entry"] - close) * pos["lots"] * pip_value
+                    unrealized += (pos["entry"] - close) / pip_size * pos["lots"] * pip_value
             equity_curve.append(balance + unrealized)
 
         # Close remaining positions at last bar price
@@ -569,11 +604,13 @@ class EventDrivenBacktestEngine:
             last_close = bars[-1]["close"]
             for pos in positions:
                 if pos["type"] == "BUY":
-                    pnl = (last_close - pos["entry"]) * pos["lots"] * pip_value - pos["commission"]
+                    pnl_pips = (last_close - pos["entry"]) / pip_size
+                    pnl = pnl_pips * pos["lots"] * pip_value - pos["commission"]
                 else:
-                    pnl = (pos["entry"] - last_close) * pos["lots"] * pip_value - pos["commission"]
+                    pnl_pips = (pos["entry"] - last_close) / pip_size
+                    pnl = pnl_pips * pos["lots"] * pip_value - pos["commission"]
                 balance += pnl
-                trades.append({"result": "win" if pnl > 0 else "loss", "pnl": pnl, "bars_held": len(bars) - pos["open_bar"]})
+                trades.append({"result": "win" if pnl > 0 else "loss", "pnl": pnl, "pnl_pips": pnl_pips, "bars_held": len(bars) - pos["open_bar"]})
 
         wins = sum(1 for t in trades if t["result"] == "win")
         total = len(trades)

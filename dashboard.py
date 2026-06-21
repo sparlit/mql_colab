@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, render_template_string
-import MetaTrader5 as mt5
+import mt5_mcp as mt5
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
@@ -12,6 +12,36 @@ import time
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# Load configuration (development or production) and initialise SQLAlchemy
+import os
+from config import config as cfg
+env = os.getenv('FLASK_ENV', 'development').lower()
+app.config.from_object(cfg.get(env, cfg['default']))
+
+from flask_sqlalchemy import SQLAlchemy
+db = SQLAlchemy(app)
+
+# Initialise Flask-Migrate for DB migrations
+from flask_migrate import Migrate
+migrate = Migrate(app, db)
+
+# Example model – stores a simple trade log
+class TradeLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    symbol = db.Column(db.String(12), nullable=False)
+    timestamp = db.Column(db.DateTime, server_default=db.func.now())
+    profit = db.Column(db.Float, nullable=False)
+
+# Simple health endpoint to verify DB connectivity
+@app.route('/db_health')
+def health():
+    try:
+        # Perform a lightweight query
+        db.session.execute('SELECT 1')
+        return jsonify(status='ok', db='connected')
+    except Exception as e:
+        return jsonify(status='error', error=str(e)), 500
 _start_time = __import__('time').time()
 
 # Add project to path for brain imports

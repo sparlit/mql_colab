@@ -5,7 +5,7 @@ Run with: pytest tests/test_brain_v6_validation.py -v
 import pytest
 import numpy as np
 from unittest.mock import MagicMock
-import MetaTrader5 as mt5
+import mt5_mcp as mt5
 
 
 class TestTradeValidator:

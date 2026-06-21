@@ -17,7 +17,7 @@ Features:
 7. Risk-per-trade based position sizing
 """
 import numpy as np
-import MetaTrader5 as mt5
+import mt5_mcp as mt5
 import time as _time
 import threading
 import logging

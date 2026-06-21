@@ -1,4 +1,4 @@
-import MetaTrader5 as mt5
+import mt5_mcp as mt5
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -234,7 +234,7 @@ class BrainStats:
 
 def _signal_multi_tf_cpu_standalone(symbol):
     """Standalone CPU-optimized multi-TF signal calculation (picklable for process pool)."""
-    import MetaTrader5 as mt5
+    import mt5_mcp as mt5
 
     tf_map = {
         mt5.TIMEFRAME_M1: "M1",
@@ -265,6 +265,8 @@ def _signal_multi_tf_cpu_standalone(symbol):
 
 
 class SignalAnalyzer:
+    STRATEGY_WEIGHTS = STRATEGY_WEIGHTS  # type: ignore[attr-defined]  # engine accesses via self._analyzer
+
     def __init__(self):
         self.strategy_performance = {}
         self._executor = None
@@ -865,101 +867,14 @@ class Brain:
         return direction, confidence
 
     def analyze(self, symbol, timeframe=mt5.TIMEFRAME_M1, params=None, df=None):
-        # === MARKET STATE GATE ===
-        # Validate market is open and data is fresh before computing signals.
-        # This is the innermost guard — prevents hallucinated signals from stale data.
-        tradeable = is_tradeable_now(symbol, timeframe)
-        if not tradeable["can_trade"]:
-            return {
-                "action": "hold",
-                "direction": 0,
-                "confidence": 0,
-                "reason": f"market_closed: {tradeable['reason']}",
-                "signals": {},
-                "active": [],
-            }
+        """Delegate to :class:`TradingEngine` to run the async pipeline.
 
-        signals_result = self.analyzer.calculate_all_signals(symbol, timeframe, params=params, df=df)
-        signals = signals_result["signals"]
-        df = signals_result["df"]
-        self.last_signals = signals
-        weighted_buy = 0
-        weighted_sell = 0
-        total_weight = 0
-        active_signals = []
-        for name, sig in signals.items():
-            weight = STRATEGY_WEIGHTS.get(name, 1.0)
-            if sig["direction"] == 1:
-                weighted_buy += sig["confidence"] * weight
-                active_signals.append(f"+{name}({sig['confidence']:.2f})")
-            elif sig["direction"] == -1:
-                weighted_sell += sig["confidence"] * weight
-                active_signals.append(f"-{name}({sig['confidence']:.2f})")
-            total_weight += weight
-        buy_score = weighted_buy / total_weight
-        sell_score = weighted_sell / total_weight
-        net_score = buy_score - sell_score
-        confidence = abs(net_score)
-        if net_score > 0:
-            direction = 1
-        elif net_score < 0:
-            direction = -1
-        else:
-            direction = 0
-        direction, confidence = self._ai_enhance(symbol, signals, direction, confidence)
-        if confidence < MIN_CONFIDENCE_TO_TRADE:
-            return {
-                "action": "hold",
-                "direction": direction,
-                "confidence": confidence,
-                "buy_score": buy_score,
-                "sell_score": sell_score,
-                "signals": signals,
-                "active": active_signals,
-            }
-        can_trade, reason = self.risk.can_open_trade(symbol, direction)
-        if not can_trade:
-            return {
-                "action": "blocked",
-                "direction": direction,
-                "confidence": confidence,
-                "reason": reason,
-                "signals": signals,
-                "active": active_signals,
-            }
-        if df is None:
-            rates = fetch_closed_rates(symbol, timeframe, 200)
-            if rates is not None and len(rates) >= 50:
-                import pandas as pd
-                df = pd.DataFrame(rates)
-        sl, tp, atr_sl, atr_tp = self.risk.calculate_dynamic_sl_tp(symbol, direction, df) if df is not None else (0, 0, 100, 200)
-        # Safety net: if SLTP engine returned 0, compute simple ATR-based fallback
-        if sl == 0 or tp == 0:
-            info = mt5.symbol_info(symbol)
-            tick = mt5.symbol_info_tick(symbol)
-            if info and tick:
-                point = info.point
-                price = tick.ask if direction == 1 else tick.bid
-                sl = round(price - 100 * point, info.digits) if direction == 1 else round(price + 100 * point, info.digits)
-                tp = round(price + 200 * point, info.digits) if direction == 1 else round(price - 200 * point, info.digits)
-                atr_sl, atr_tp = 100, 200
-        lot = self.risk.calculate_position_size(symbol, atr_sl, confidence)
-        return {
-            "action": "trade",
-            "direction": direction,
-            "direction_str": "BUY" if direction == 1 else "SELL",
-            "confidence": confidence,
-            "buy_score": buy_score,
-            "sell_score": sell_score,
-            "lot": lot,
-            "sl_points": atr_sl,
-            "tp_points": atr_tp,
-            "sl": sl,
-            "tp": tp,
-            "signals": signals,
-            "active": active_signals,
-            "stats": self.stats.get_full_report(),
-        }
+        This thin wrapper preserves the legacy ``Brain.analyze`` contract so
+        that every existing call site continues to work unmodified.
+        """
+        from trading_engine import TradingEngine  # lazy import to avoid circular deps
+        engine = TradingEngine()                  # lightweight, stateless
+        return engine.execute(symbol, timeframe, params, df)
 
     def record_trade_result(self, ticket, symbol, direction, lot, price, sl, tp, profit, strategy="combined"):
         trade_info = {

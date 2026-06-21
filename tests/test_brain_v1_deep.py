@@ -280,9 +280,29 @@ class TestBrainAnalyze:
     """Test that analyze returns a proper decision dict."""
 
     def _mock_analyze_prereqs(self, mock_mt5, monkeypatch):
+        async def _mock_tick(s):
+            return synthetic_tick(bid=1.10000, ask=1.10015)
+
+        monkeypatch.setattr("async_mt5.symbol_info_tick", _mock_tick)
         monkeypatch.setattr(
-            "brain_v1.is_tradeable_now",
-            lambda s, tf=None: {"can_trade": True},
+            "trading_engine.BrainStats.get_kelly_fraction",
+            lambda self, lookback=100: 1.0,
+        )
+        async def _mock_order_send(req):
+            return synthetic_order_result(retcode=10009, order=99999, price=req["price"])
+
+        monkeypatch.setattr("async_mt5.order_send", _mock_order_send)
+        monkeypatch.setattr(
+            "trading_engine.RiskManager.can_open_trade",
+            lambda self, s, d: (True, "OK"),
+        )
+        monkeypatch.setattr(
+            "trading_engine.RiskManager.calculate_dynamic_sl_tp",
+            lambda self, s, d, df: (1.09900, 1.10200, 100, 200),
+        )
+        monkeypatch.setattr(
+            "trading_engine.RiskManager.calculate_position_size",
+            lambda self, s, sl, c: 0.1,
         )
 
         def _mock_calc_signals(self, symbol, timeframe, params=None, df=None):
@@ -301,20 +321,8 @@ class TestBrainAnalyze:
             }
 
         monkeypatch.setattr(
-            "brain_v1.SignalAnalyzer.calculate_all_signals",
+            "trading_engine.SignalAnalyzer.calculate_all_signals",
             _mock_calc_signals,
-        )
-        monkeypatch.setattr(
-            "brain_v1.RiskManager.can_open_trade",
-            lambda self, s, d: (True, "OK"),
-        )
-        monkeypatch.setattr(
-            "brain_v1.RiskManager.calculate_dynamic_sl_tp",
-            lambda self, s, d, df: (1.09900, 1.10200, 100, 200),
-        )
-        monkeypatch.setattr(
-            "brain_v1.RiskManager.calculate_position_size",
-            lambda self, s, sl, c: 0.1,
         )
 
     def test_returns_decision_dict_with_all_keys(self, mock_mt5, monkeypatch):
@@ -334,9 +342,33 @@ class TestBrainAnalyze:
 
     def test_hold_action_when_market_not_tradeable(self, mock_mt5, monkeypatch):
         brain = _make_brain(mock_mt5, monkeypatch)
+        async def _mock_tick(s):
+            return synthetic_tick(bid=1.10000, ask=1.10015)
+
+        monkeypatch.setattr("async_mt5.symbol_info_tick", _mock_tick)
         monkeypatch.setattr(
-            "brain_v1.is_tradeable_now",
-            lambda s, tf=None: {"can_trade": False, "reason": "market_closed"},
+            "trading_engine.BrainStats.get_kelly_fraction",
+            lambda self, lookback=100: 0.5,
+        )
+
+        def _zero_signals(self, symbol, timeframe, params=None, df=None):
+            return {
+                "signals": {
+                    "ma_crossover": {"direction": 0, "confidence": 0, "name": "ma_crossover"},
+                    "rsi": {"direction": 0, "confidence": 0, "name": "rsi"},
+                    "bollinger": {"direction": 0, "confidence": 0, "name": "bollinger"},
+                    "breakout": {"direction": 0, "confidence": 0, "name": "breakout"},
+                    "orderflow": {"direction": 0, "confidence": 0, "name": "orderflow"},
+                    "momentum": {"direction": 0, "confidence": 0, "name": "momentum"},
+                    "support_resistance": {"direction": 0, "confidence": 0, "name": "support_resistance"},
+                    "multi_tf": {"direction": 0, "confidence": 0, "name": "multi_tf"},
+                },
+                "df": df if df is not None else synthetic_df(300),
+            }
+
+        monkeypatch.setattr(
+            "trading_engine.SignalAnalyzer.calculate_all_signals",
+            _zero_signals,
         )
         result = brain.analyze("EURUSD", df=synthetic_df(300))
         assert result["action"] == "hold"
@@ -344,9 +376,13 @@ class TestBrainAnalyze:
 
     def test_hold_action_on_low_confidence(self, mock_mt5, monkeypatch):
         brain = _make_brain(mock_mt5, monkeypatch)
+        async def _mock_tick(s):
+            return synthetic_tick(bid=1.10000, ask=1.10015)
+
+        monkeypatch.setattr("async_mt5.symbol_info_tick", _mock_tick)
         monkeypatch.setattr(
-            "brain_v1.is_tradeable_now",
-            lambda s, tf=None: {"can_trade": True},
+            "trading_engine.BrainStats.get_kelly_fraction",
+            lambda self, lookback=100: 0.5,
         )
 
         def _mock_no_signal(self, symbol, timeframe, params=None, df=None):
@@ -364,7 +400,7 @@ class TestBrainAnalyze:
                 "df": df if df is not None else synthetic_df(300),
             }
 
-        monkeypatch.setattr("brain_v1.SignalAnalyzer.calculate_all_signals", _mock_no_signal)
+        monkeypatch.setattr("trading_engine.SignalAnalyzer.calculate_all_signals", _mock_no_signal)
         result = brain.analyze("EURUSD", df=synthetic_df(300))
         assert result["action"] == "hold"
 
@@ -372,7 +408,7 @@ class TestBrainAnalyze:
         brain = _make_brain(mock_mt5, monkeypatch)
         self._mock_analyze_prereqs(mock_mt5, monkeypatch)
         monkeypatch.setattr(
-            "brain_v1.RiskManager.can_open_trade",
+            "trading_engine.RiskManager.can_open_trade",
             lambda self, s, d: (False, "Drawdown kill switch"),
         )
         result = brain.analyze("EURUSD", df=synthetic_df(300))

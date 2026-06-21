@@ -1,15 +1,19 @@
 """Walk-forward validation for backtesting.
 
 Splits historical data into rolling train/test windows, evaluates per-window
-metrics, and detects overfitting.
+metrics, and detects overfitting. Supports parallel window evaluation.
 """
 import logging
 import numpy as np
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from ml_enhancements import EventDrivenBacktestEngine, RulesBaseline
 from backtest_data import df_to_bars
 
 logger = logging.getLogger(__name__)
+
+# Parallelism: walk-forward windows are independent — evaluate concurrently
+_WF_MAX_WORKERS = 5  # Typically 5 windows
 
 
 def _split_windows(total_bars, train_pct=0.7, n_windows=5):
@@ -59,8 +63,52 @@ def _max_drawdown_from_equity(equity_curve):
     return max_dd * 100
 
 
+def _evaluate_single_window(args):
+    """Evaluate a single walk-forward window (thread-safe, independent).
+
+    Args:
+        tuple of (idx, w, df, baseline, sl_pips, tp_pips, initial_balance, pip_value)
+    Returns:
+        window_result dict
+    """
+    idx, w, df, baseline, sl_pips, tp_pips, initial_balance, pip_value = args
+
+    train_slice = df.iloc[w["train"][0]:w["train"][1] + 1].copy()
+    test_slice = df.iloc[w["test"][0]:w["test"][1] + 1].copy()
+
+    train_signals = _generate_signals(baseline, train_slice, sl_pips, tp_pips)
+    test_signals = _generate_signals(baseline, test_slice, sl_pips, tp_pips)
+
+    train_bars = df_to_bars(train_slice)
+    test_bars = df_to_bars(test_slice)
+
+    train_metrics = _evaluate_window(train_signals, train_bars, initial_balance, pip_value)
+    test_metrics = _evaluate_window(test_signals, test_bars, initial_balance, pip_value)
+
+    wr = test_metrics.get("win_rate", 0)
+    pf = test_metrics.get("profit_factor", 0)
+    dd = test_metrics.get("max_drawdown", 100)
+    sharpe = test_metrics.get("sharpe_ratio", 0)
+
+    return {
+        "window": idx + 1,
+        "train_bars": len(train_slice),
+        "test_bars": len(test_slice),
+        "train_trades": train_metrics.get("total_trades", 0),
+        "test_trades": test_metrics.get("total_trades", 0),
+        "train_return_pct": train_metrics.get("total_return", 0),
+        "test_return_pct": test_metrics.get("total_return", 0),
+        "train_sharpe": train_metrics.get("sharpe_ratio", 0),
+        "test_sharpe": sharpe,
+        "test_win_rate": wr,
+        "test_profit_factor": pf,
+        "test_max_drawdown": dd,
+    }
+
+
 def run_walk_forward(df, initial_balance=10000, pip_value=10.0,
-                     train_pct=0.7, n_windows=5, sl_pips=50, tp_pips=100):
+                     train_pct=0.7, n_windows=5, sl_pips=50, tp_pips=100,
+                     parallel=True):
     """Run walk-forward validation on a DataFrame of OHLCV data.
 
     Args:
@@ -71,6 +119,7 @@ def run_walk_forward(df, initial_balance=10000, pip_value=10.0,
         n_windows: number of rolling windows
         sl_pips: stop loss in pips
         tp_pips: take profit in pips
+        parallel: use ThreadPoolExecutor for window evaluation (default True)
 
     Returns:
         dict with per-window results, aggregate metrics, overfitting flag
@@ -84,44 +133,37 @@ def run_walk_forward(df, initial_balance=10000, pip_value=10.0,
         return {"error": "could not create windows", "windows": []}
 
     baseline = RulesBaseline()
-    window_results = []
 
-    for idx, w in enumerate(windows):
-        logger.info("Walk-forward window %d/%d", idx + 1, len(windows))
-        train_slice = df.iloc[w["train"][0]:w["train"][1] + 1].copy()
-        test_slice = df.iloc[w["test"][0]:w["test"][1] + 1].copy()
+    if parallel and len(windows) > 1:
+        # Parallel window evaluation
+        window_args = [
+            (idx, w, df, baseline, sl_pips, tp_pips, initial_balance, pip_value)
+            for idx, w in enumerate(windows)
+        ]
+        window_results = [None] * len(windows)
+        with ThreadPoolExecutor(max_workers=min(_WF_MAX_WORKERS, len(windows)),
+                                thread_name_prefix="WF") as pool:
+            futures = {pool.submit(_evaluate_single_window, args): args[0] for args in window_args}
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    window_results[idx] = future.result(timeout=120)
+                except Exception as e:
+                    logger.error("Walk-forward window %d failed: %s", idx + 1, e)
+                    window_results[idx] = {"window": idx + 1, "error": str(e)}
+        # Filter out None (shouldn't happen but safety)
+        window_results = [w for w in window_results if w is not None]
+    else:
+        # Sequential fallback
+        window_results = []
+        for idx, w in enumerate(windows):
+            result = _evaluate_single_window(
+                (idx, w, df, baseline, sl_pips, tp_pips, initial_balance, pip_value)
+            )
+            window_results.append(result)
 
-        train_signals = _generate_signals(baseline, train_slice, sl_pips, tp_pips)
-        test_signals = _generate_signals(baseline, test_slice, sl_pips, tp_pips)
-
-        train_bars = df_to_bars(train_slice)
-        test_bars = df_to_bars(test_slice)
-
-        train_metrics = _evaluate_window(train_signals, train_bars, initial_balance, pip_value)
-        test_metrics = _evaluate_window(test_signals, test_bars, initial_balance, pip_value)
-
-        wr = test_metrics.get("win_rate", 0)
-        pf = test_metrics.get("profit_factor", 0)
-        dd = test_metrics.get("max_drawdown", 100)
-        sharpe = test_metrics.get("sharpe_ratio", 0)
-
-        window_results.append({
-            "window": idx + 1,
-            "train_bars": len(train_slice),
-            "test_bars": len(test_slice),
-            "train_trades": train_metrics.get("total_trades", 0),
-            "test_trades": test_metrics.get("total_trades", 0),
-            "train_return_pct": train_metrics.get("total_return", 0),
-            "test_return_pct": test_metrics.get("total_return", 0),
-            "train_sharpe": train_metrics.get("sharpe_ratio", 0),
-            "test_sharpe": sharpe,
-            "test_win_rate": wr,
-            "test_profit_factor": pf,
-            "test_max_drawdown": dd,
-        })
-
-    train_returns = [w["train_return_pct"] for w in window_results]
-    test_returns = [w["test_return_pct"] for w in window_results]
+    train_returns = [w.get("train_return_pct", 0) for w in window_results]
+    test_returns = [w.get("test_return_pct", 0) for w in window_results]
     avg_train = np.mean(train_returns) if train_returns else 0
     avg_test = np.mean(test_returns) if test_returns else 0
 

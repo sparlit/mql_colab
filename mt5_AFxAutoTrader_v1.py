@@ -1,10 +1,11 @@
-import MetaTrader5 as mt5
+import mt5_mcp as mt5
 import pandas as pd
 import numpy as np
 import time
 import threading
 import queue
 import logging
+import signal
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from brain_v1 import Brain
@@ -1277,7 +1278,13 @@ class ScalperOrchestrator:
         logger.info("  Dedicated: PositionManager | TradeChecker | Executor | Monitor | Printer | Exporter | Scanner")
         logger.info("  Dashboards: http://localhost:%d (web) + MT5 Terminal Panel (EA)", DASHBOARD_PORT)
         logger.info("  Data Export: brain_data/ (JSON files for MT5 EA)")
-        logger.info("  Press Ctrl+C to stop.")
+        logger.info("  Press Ctrl+C or SIGTERM to stop.")
+
+        # Register SIGTERM handler for graceful shutdown (Docker sends SIGTERM)
+        def _handle_term(signum, frame):
+            logger.info("Received signal %s, initiating graceful shutdown...", signum)
+            self._running = False
+        signal.signal(signal.SIGTERM, _handle_term)
 
         try:
             while self._running:

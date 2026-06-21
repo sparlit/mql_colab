@@ -1,4 +1,4 @@
-import MetaTrader5 as mt5
+import mt5_mcp as mt5
 import numpy as np
 from datetime import datetime
 import time as _time
@@ -215,7 +215,7 @@ class LiquidityMap:
         levels = self.liquidity_levels.get(symbol, [])
         if current_price is None:
             # Try to get current price from MT5
-            import MetaTrader5 as mt5
+            import mt5_mcp as mt5
             tick = mt5.symbol_info_tick(symbol)
             current_price = tick.bid if tick else 0
         if direction == 1:

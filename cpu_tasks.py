@@ -133,8 +133,11 @@ def _calc_atr(close_data):
 
 def monte_carlo_simulation(win_rate: float, avg_win: float, avg_loss: float,
                            n_trades: int = 1000, n_simulations: int = 1000,
-                           initial_balance: float = 10000.0) -> Dict:
+                           initial_balance: float = 10000.0,
+                           parallel: bool = True) -> Dict:
     """Run Monte Carlo trade simulation (CPU-bound, numba JIT-compiled).
+
+    Supports parallel execution by splitting simulations across CPU cores.
 
     Args:
         win_rate: Probability of winning a trade (0-1)
@@ -143,10 +146,49 @@ def monte_carlo_simulation(win_rate: float, avg_win: float, avg_loss: float,
         n_trades: Number of trades per simulation
         n_simulations: Number of Monte Carlo simulations
         initial_balance: Starting balance
+        parallel: Split simulations across CPU cores (default True)
     Returns:
         Dictionary with simulation results
     """
-    returns, dds = _monte_carlo_kernel(win_rate, avg_win, avg_loss, n_trades, n_simulations, initial_balance)
+    if parallel and n_simulations >= 100:
+        import os
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        n_workers = min(os.cpu_count() or 4, 8)
+        chunk_size = max(1, n_simulations // n_workers)
+        chunks = []
+        remaining = n_simulations
+        for _ in range(n_workers):
+            size = min(chunk_size, remaining)
+            if size <= 0:
+                break
+            chunks.append(size)
+            remaining -= size
+
+        if len(chunks) > 1:
+            all_returns = []
+            all_dds = []
+            with ProcessPoolExecutor(max_workers=n_workers) as pool:
+                futures = {
+                    pool.submit(_monte_carlo_kernel, win_rate, avg_win, avg_loss,
+                                n_trades, chunk, initial_balance): i
+                    for i, chunk in enumerate(chunks)
+                }
+                for future in as_completed(futures):
+                    returns, dds = future.result(timeout=30)
+                    all_returns.append(returns)
+                    all_dds.append(dds)
+
+            returns = np.concatenate(all_returns)
+            dds = np.concatenate(all_dds)
+        else:
+            returns, dds = _monte_carlo_kernel(
+                win_rate, avg_win, avg_loss, n_trades, n_simulations, initial_balance
+            )
+    else:
+        returns, dds = _monte_carlo_kernel(
+            win_rate, avg_win, avg_loss, n_trades, n_simulations, initial_balance
+        )
 
     return {
         "mean_return": round(float(np.mean(returns) * 100), 2),
@@ -157,7 +199,8 @@ def monte_carlo_simulation(win_rate: float, avg_win: float, avg_loss: float,
         "cvar_95": round(float(np.mean(returns[returns <= np.percentile(returns, 5)]) * 100), 2) if np.any(returns <= np.percentile(returns, 5)) else 0,
         "max_dd_avg": round(float(np.mean(dds) * 100), 2),
         "max_dd_worst": round(float(np.max(dds) * 100), 2),
-        "simulations": n_simulations,
+        "simulations": len(returns),
+        "parallel_workers": len(chunks) if parallel and len(chunks) > 1 else 1,
     }
 
 
@@ -197,7 +240,7 @@ def calculate_multi_tf_signals(args: Tuple[str, List[int]]) -> Dict[str, int]:
         Dictionary mapping timeframe to signal direction
     """
     try:
-        import MetaTrader5 as mt5
+        import mt5_mcp as mt5
     except ImportError:
         symbol, timeframes = args
         return {tf: 0 for tf in timeframes}
