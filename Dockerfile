@@ -35,7 +35,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Health check — curl the health endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8050/api/health')" \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8050/health')" \
     || exit 1
 
 # Entrypoint handles SIGTERM gracefully via the application's own signal handlers

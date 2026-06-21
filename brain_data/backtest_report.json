@@ -1,23 +1,23 @@
 {
-  "generated_at": "2026-06-19T05:32:44.411989",
-  "symbol": "XAUUSD",
-  "timeframe": 16385,
-  "months": 6,
-  "bars": 950,
+  "generated_at": "2026-06-20T12:45:26.150738",
+  "symbol": "EURUSD",
+  "timeframe": 300,
+  "months": 12,
+  "bars": 500,
   "backtest": {
-    "final_balance": 6994.42,
-    "total_return": -30.06,
-    "total_trades": 5,
-    "win_rate": 20.0,
-    "max_drawdown": 37.41,
-    "profit_factor": 0.0,
-    "avg_bars_held": 859.8,
-    "sharpe_ratio": -1.04,
-    "recovery_factor": -0.8
+    "final_balance": 9697.42,
+    "total_return": -3.03,
+    "total_trades": 9,
+    "win_rate": 44.4,
+    "max_drawdown": 3.51,
+    "profit_factor": 0.52,
+    "avg_bars_held": 40.6,
+    "sharpe_ratio": -0.33,
+    "recovery_factor": -0.86
   },
   "walk_forward": {
     "n_windows": 5,
-    "avg_train_return_pct": -17.38,
+    "avg_train_return_pct": -0.17,
     "avg_test_return_pct": 0.0,
     "avg_test_sharpe": 0.0,
     "avg_test_win_rate": 0.0,
@@ -27,13 +27,13 @@
     "windows": [
       {
         "window": 1,
-        "train_bars": 134,
-        "test_bars": 57,
-        "train_trades": 4,
+        "train_bars": 71,
+        "test_bars": 30,
+        "train_trades": 0,
         "test_trades": 0,
-        "train_return_pct": -28.83,
+        "train_return_pct": 0.0,
         "test_return_pct": 0.0,
-        "train_sharpe": -10.41,
+        "train_sharpe": 0,
         "test_sharpe": 0,
         "test_win_rate": 0.0,
         "test_profit_factor": 0.0,
@@ -41,13 +41,13 @@
       },
       {
         "window": 2,
-        "train_bars": 134,
-        "test_bars": 57,
-        "train_trades": 2,
+        "train_bars": 71,
+        "test_bars": 30,
+        "train_trades": 1,
         "test_trades": 0,
-        "train_return_pct": -11.91,
+        "train_return_pct": -0.23,
         "test_return_pct": 0.0,
-        "train_sharpe": -8.08,
+        "train_sharpe": 0,
         "test_sharpe": 0,
         "test_win_rate": 0.0,
         "test_profit_factor": 0.0,
@@ -55,13 +55,13 @@
       },
       {
         "window": 3,
-        "train_bars": 134,
-        "test_bars": 57,
-        "train_trades": 5,
+        "train_bars": 71,
+        "test_bars": 30,
+        "train_trades": 1,
         "test_trades": 0,
-        "train_return_pct": -29.96,
+        "train_return_pct": -0.22,
         "test_return_pct": 0.0,
-        "train_sharpe": -9.94,
+        "train_sharpe": 0,
         "test_sharpe": 0,
         "test_win_rate": 0.0,
         "test_profit_factor": 0.0,
@@ -69,13 +69,13 @@
       },
       {
         "window": 4,
-        "train_bars": 134,
-        "test_bars": 57,
-        "train_trades": 2,
+        "train_bars": 71,
+        "test_bars": 30,
+        "train_trades": 1,
         "test_trades": 0,
-        "train_return_pct": -12.1,
+        "train_return_pct": -0.38,
         "test_return_pct": 0.0,
-        "train_sharpe": -85.13,
+        "train_sharpe": 0,
         "test_sharpe": 0,
         "test_win_rate": 0.0,
         "test_profit_factor": 0.0,
@@ -83,11 +83,11 @@
       },
       {
         "window": 5,
-        "train_bars": 134,
-        "test_bars": 56,
-        "train_trades": 1,
+        "train_bars": 71,
+        "test_bars": 29,
+        "train_trades": 0,
         "test_trades": 0,
-        "train_return_pct": -4.08,
+        "train_return_pct": 0.0,
         "test_return_pct": 0.0,
         "train_sharpe": 0,
         "test_sharpe": 0,
@@ -104,134 +104,132 @@
     "passed": false,
     "criteria_met": {
       "sharpe": {
-        "value": -1.04,
+        "value": -0.33,
         "threshold": 0.8,
         "passed": "False"
       },
       "drawdown": {
-        "value": 37.41,
+        "value": 3.51,
         "threshold": 15.0,
-        "passed": false
+        "passed": true
       },
       "profit_factor": {
-        "value": 0.0,
+        "value": 0.52,
         "threshold": 1.3,
         "passed": false
       },
       "win_rate_low": {
-        "value": 20.0,
+        "value": 44.4,
         "threshold": 35.0,
-        "passed": false
+        "passed": true
       },
       "win_rate_high": {
-        "value": 20.0,
+        "value": 44.4,
         "threshold": 65.0,
         "passed": true
       },
       "trades": {
-        "value": 5,
+        "value": 9,
         "threshold": 100,
         "passed": false
       }
     },
     "failures": [
-      "sharpe: -1.04 vs 0.8",
-      "drawdown: 37.41 vs 15.0",
-      "profit_factor: 0.0 vs 1.3",
-      "win_rate_low: 20.0 vs 35.0",
-      "trades: 5 vs 100"
+      "sharpe: -0.33 vs 0.8",
+      "profit_factor: 0.52 vs 1.3",
+      "trades: 9 vs 100"
     ],
     "next_phase": null
   },
   "lgbm_backtest": {
-    "final_balance": 3624.64,
-    "total_return": -63.75,
-    "total_trades": 5,
-    "win_rate": 0.0,
-    "max_drawdown": 68.09,
-    "profit_factor": 0.0,
-    "avg_bars_held": 898.0,
-    "sharpe_ratio": -1.95,
+    "final_balance": 8900.9,
+    "total_return": -10.99,
+    "total_trades": 18,
+    "win_rate": 33.3,
+    "max_drawdown": 11.63,
+    "profit_factor": 0.31,
+    "avg_bars_held": 26.9,
+    "sharpe_ratio": -0.59,
     "recovery_factor": -0.94
   },
   "lgbm_feature_importance": [
     {
-      "name": "macd_histogram",
-      "importance": 120.45
-    },
-    {
-      "name": "volume_ratio",
-      "importance": 116.05
-    },
-    {
       "name": "bb_width",
-      "importance": 80.91
-    },
-    {
-      "name": "rsi",
-      "importance": 74.17
+      "importance": 1180.02
     },
     {
       "name": "atr_ratio",
-      "importance": 62.42
-    },
-    {
-      "name": "close_position",
-      "importance": 56.91
-    },
-    {
-      "name": "price_range_position",
-      "importance": 56.1
-    },
-    {
-      "name": "price_return_1",
-      "importance": 55.96
-    },
-    {
-      "name": "stoch_d",
-      "importance": 50.58
+      "importance": 1118.68
     },
     {
       "name": "volatility_20",
-      "importance": 37.18
-    },
-    {
-      "name": "price_return_5",
-      "importance": 34.71
-    },
-    {
-      "name": "volatility_10",
-      "importance": 33.2
-    },
-    {
-      "name": "consecutive_up",
-      "importance": 28.97
+      "importance": 1070.79
     },
     {
       "name": "atr",
-      "importance": 26.76
+      "importance": 1020.04
     },
     {
-      "name": "momentum_5",
-      "importance": 26.54
+      "name": "volatility_10",
+      "importance": 861.33
+    },
+    {
+      "name": "adx_strength",
+      "importance": 852.93
+    },
+    {
+      "name": "price_range_position",
+      "importance": 800.45
+    },
+    {
+      "name": "macd_signal",
+      "importance": 770.63
+    },
+    {
+      "name": "volume_sma_ratio",
+      "importance": 757.9
+    },
+    {
+      "name": "stoch_d",
+      "importance": 709.75
+    },
+    {
+      "name": "volume_ratio",
+      "importance": 655.37
+    },
+    {
+      "name": "close_position",
+      "importance": 651.78
+    },
+    {
+      "name": "rsi",
+      "importance": 644.37
+    },
+    {
+      "name": "bb_position",
+      "importance": 638.03
+    },
+    {
+      "name": "macd",
+      "importance": 633.76
     }
   ],
   "lgbm_train_metrics": {
-    "samples": 106,
-    "valid_samples": 18,
-    "accuracy": 0.2222,
+    "samples": 1506,
+    "valid_samples": 265,
+    "accuracy": 0.4717,
     "class_metrics": {
       "sell": {
-        "accuracy": 0.5714,
-        "count": 7
+        "accuracy": 0.4338,
+        "count": 136
       },
       "buy": {
-        "accuracy": 0.0,
-        "count": 11
+        "accuracy": 0.5116,
+        "count": 129
       }
     },
     "num_boost_round": 200,
-    "n_features": 32,
+    "n_features": 35,
     "n_classes": 2
   }
 }

@@ -1035,7 +1035,7 @@ def api_debug():
 @app.route('/health')
 def health():
     import time
-    import mt5
+    import mt5_mcp as mt5
     terminal_ok = mt5.terminal_info() is not None
     account = mt5.account_info()
     return jsonify({
