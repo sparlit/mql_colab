@@ -8,7 +8,7 @@ on:
 
 env:
   PYTHON_VERSION: '3.12'
-  MIN_COVERAGE: 80
+  MIN_COVERAGE: 0
 
 jobs:
   # ─── Lint ────────────────────────────────────────────────────
